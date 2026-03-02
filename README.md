@@ -26,7 +26,13 @@ The **System Settings** app appears on the platform desktop (icon ⚙). It opens
 
 ## Database
 
-Table: `platform_settings`. See `docs/SCHEMA.sql`. Create it manually or via your ORM sync if the package is discovered.
+Table `platform_settings` is created/updated by the ORM sync. Run:
+
+```bash
+bin/semitexa orm:sync
+```
+
+(or `docker compose exec app php vendor/bin/semitexa orm:sync`). The collector discovers `SettingResource` (via `#[FromTable]`) and applies the schema diff.
 
 ## Tenant behaviour
 
