@@ -1,0 +1,30 @@
+{
+    "name": "semitexa/platform-settings",
+    "description": "Semitexa Platform Settings — system settings store for modules (multi-tenant aware)",
+    "type": "semitexa-module",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Semitexa",
+            "email": "support@semitexa.com"
+        }
+    ],
+    "require": {
+        "php": "^8.4",
+        "semitexa/core": "*",
+        "semitexa/orm": "*",
+        "semitexa/platform-wm": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "Semitexa\\Platform\\Settings\\": "src/"
+        }
+    },
+    "extra": {
+        "semitexa-module": {
+            "name": "platform-settings",
+            "description": "System settings: key-value store per module, multi-tenant aware"
+        }
+    },
+    "version": "0.0.1"
+}
