@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Semitexa\Platform\Settings\Domain;
+namespace Semitexa\Platform\Settings\Domain\Model;
 
 final readonly class Setting
 {

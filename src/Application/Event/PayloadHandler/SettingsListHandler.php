@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Semitexa\Platform\Settings\Application\Handler\Request;
+namespace Semitexa\Platform\Settings\Application\Event\PayloadHandler;
 
 use Semitexa\Core\Attributes\AsPayloadHandler;
 use Semitexa\Core\Attributes\InjectAsReadonly;
@@ -12,7 +12,7 @@ use Semitexa\Core\Contract\ResourceInterface;
 use Semitexa\Core\Response;
 use Semitexa\Orm\OrmManager;
 use Semitexa\Platform\Settings\Application\Payload\Request\SettingsListPayload;
-use Semitexa\Platform\Settings\Application\Resource\SettingRepository;
+use Semitexa\Platform\Settings\Application\Db\MySQL\Repository\SettingRepository;
 
 #[AsPayloadHandler(
     payload: SettingsListPayload::class,

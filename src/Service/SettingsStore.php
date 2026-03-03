@@ -6,8 +6,8 @@ namespace Semitexa\Platform\Settings\Service;
 
 use Semitexa\Core\Attributes\AsServiceContract;
 use Semitexa\Orm\OrmManager;
-use Semitexa\Platform\Settings\Application\Resource\SettingRepository;
-use Semitexa\Platform\Settings\Application\Resource\SettingResource;
+use Semitexa\Platform\Settings\Application\Db\MySQL\Model\SettingResource;
+use Semitexa\Platform\Settings\Application\Db\MySQL\Repository\SettingRepository;
 use Semitexa\Platform\Settings\Contract\SettingsStoreInterface;
 
 #[AsServiceContract(of: SettingsStoreInterface::class)]
@@ -75,7 +75,7 @@ final class SettingsStore implements SettingsStoreInterface
 
         $out = [];
         foreach ($list as $setting) {
-            if ($setting instanceof \Semitexa\Platform\Settings\Domain\Setting) {
+            if ($setting instanceof \Semitexa\Platform\Settings\Domain\Model\Setting) {
                 $decoded = $setting->value === '' ? null : json_decode($setting->value, true, 512, \JSON_THROW_ON_ERROR);
                 $out[$setting->key] = $decoded;
             }

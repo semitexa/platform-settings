@@ -2,11 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Semitexa\Platform\Settings\Application\Resource;
+namespace Semitexa\Platform\Settings\Application\Db\MySQL\Repository;
 
 use Semitexa\Orm\Repository\AbstractRepository;
+use Semitexa\Platform\Settings\Application\Db\MySQL\Model\SettingResource;
+use Semitexa\Platform\Settings\Domain\Repository\SettingRepositoryInterface;
 
-class SettingRepository extends AbstractRepository
+class SettingRepository extends AbstractRepository implements SettingRepositoryInterface
 {
     protected function getResourceClass(): string
     {

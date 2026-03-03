@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Semitexa\Platform\Settings\Application\Resource;
+namespace Semitexa\Platform\Settings\Application\Db\MySQL\Model;
 
 use Semitexa\Orm\Adapter\MySqlType;
 use Semitexa\Orm\Attribute\Column;
@@ -13,7 +13,7 @@ use Semitexa\Orm\Attribute\TenantScoped;
 use Semitexa\Orm\Contract\DomainMappable;
 use Semitexa\Orm\Trait\HasTimestamps;
 use Semitexa\Orm\Trait\HasUuidV7;
-use Semitexa\Platform\Settings\Domain\Setting;
+use Semitexa\Platform\Settings\Domain\Model\Setting;
 
 #[FromTable(name: 'platform_settings', mapTo: Setting::class)]
 #[TenantScoped(strategy: 'same_storage')]
