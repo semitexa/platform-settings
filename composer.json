@@ -26,5 +26,5 @@
             "description": "System settings: key-value store per module, multi-tenant aware"
         }
     },
-    "version": "0.0.3"
+    "version": "0.0.4"
 }
