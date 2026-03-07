@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Semitexa\Platform\Settings\App;
+namespace Semitexa\Platform\Settings\Application\WmApp;
 
-use Semitexa\Platform\Wm\Attributes\AsWmApp;
+use Semitexa\Platform\Wm\Application\Attribute\AsWmApp;
 
 #[AsWmApp(
     id: 'system-settings',
@@ -12,6 +12,4 @@ use Semitexa\Platform\Wm\Attributes\AsWmApp;
     entryUrl: '/platform/settings',
     icon: '⚙',
 )]
-final class SystemSettingsWmApp
-{
-}
+final class SystemSettingsWmApp {}
