@@ -18,12 +18,25 @@ final class SettingsStore implements SettingsStoreInterface
 
     public function get(string $moduleKey, string $key): mixed
     {
+        return $this->getByScope($moduleKey, $key, null);
+    }
+
+    public function getForUser(string $moduleKey, string $key, string $userId): mixed
+    {
+        if ($userId === '') {
+            throw new \InvalidArgumentException('userId is required');
+        }
+        return $this->getByScope($moduleKey, $key, $userId);
+    }
+
+    private function getByScope(string $moduleKey, string $key, ?string $userId): mixed
+    {
         $this->validateModuleKey($moduleKey);
         $this->validateKey($key);
 
-        $setting = OrmManager::run(function (OrmManager $orm) use ($moduleKey, $key) {
+        $setting = OrmManager::run(function (OrmManager $orm) use ($moduleKey, $key, $userId) {
             $repo = new SettingRepository($orm->getAdapter());
-            return $repo->findByModuleAndKey($moduleKey, $key);
+            return $repo->findByModuleAndKey($moduleKey, $key, $userId);
         });
 
         if ($setting === null) {
@@ -40,14 +53,27 @@ final class SettingsStore implements SettingsStoreInterface
 
     public function set(string $moduleKey, string $key, mixed $value): void
     {
+        $this->setByScope($moduleKey, $key, $value, null);
+    }
+
+    public function setForUser(string $moduleKey, string $key, mixed $value, string $userId): void
+    {
+        if ($userId === '') {
+            throw new \InvalidArgumentException('userId is required');
+        }
+        $this->setByScope($moduleKey, $key, $value, $userId);
+    }
+
+    private function setByScope(string $moduleKey, string $key, mixed $value, ?string $userId): void
+    {
         $this->validateModuleKey($moduleKey);
         $this->validateKey($key);
 
         $encoded = json_encode($value, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE);
 
-        OrmManager::run(function (OrmManager $orm) use ($moduleKey, $key, $encoded) {
+        OrmManager::run(function (OrmManager $orm) use ($moduleKey, $key, $encoded, $userId) {
             $repo = new SettingRepository($orm->getAdapter());
-            $existing = $repo->findResourceByModuleAndKey($moduleKey, $key);
+            $existing = $repo->findResourceByModuleAndKey($moduleKey, $key, $userId);
 
             if ($existing !== null) {
                 $existing->value = $encoded;
@@ -56,6 +82,7 @@ final class SettingsStore implements SettingsStoreInterface
             }
 
             $resource = new SettingResource();
+            $resource->user_id = $userId;
             $resource->module_key = $moduleKey;
             $resource->key = $key;
             $resource->value = $encoded;
@@ -66,11 +93,24 @@ final class SettingsStore implements SettingsStoreInterface
 
     public function getAll(string $moduleKey): array
     {
+        return $this->getAllByScope($moduleKey, null);
+    }
+
+    public function getAllForUser(string $moduleKey, string $userId): array
+    {
+        if ($userId === '') {
+            throw new \InvalidArgumentException('userId is required');
+        }
+        return $this->getAllByScope($moduleKey, $userId);
+    }
+
+    private function getAllByScope(string $moduleKey, ?string $userId): array
+    {
         $this->validateModuleKey($moduleKey);
 
-        $list = OrmManager::run(function (OrmManager $orm) use ($moduleKey) {
+        $list = OrmManager::run(function (OrmManager $orm) use ($moduleKey, $userId) {
             $repo = new SettingRepository($orm->getAdapter());
-            return $repo->findAllByModule($moduleKey);
+            return $repo->findAllByModule($moduleKey, $userId);
         });
 
         $out = [];
@@ -85,12 +125,25 @@ final class SettingsStore implements SettingsStoreInterface
 
     public function remove(string $moduleKey, string $key): void
     {
+        $this->removeByScope($moduleKey, $key, null);
+    }
+
+    public function removeForUser(string $moduleKey, string $key, string $userId): void
+    {
+        if ($userId === '') {
+            throw new \InvalidArgumentException('userId is required');
+        }
+        $this->removeByScope($moduleKey, $key, $userId);
+    }
+
+    private function removeByScope(string $moduleKey, string $key, ?string $userId): void
+    {
         $this->validateModuleKey($moduleKey);
         $this->validateKey($key);
 
-        OrmManager::run(function (OrmManager $orm) use ($moduleKey, $key) {
+        OrmManager::run(function (OrmManager $orm) use ($moduleKey, $key, $userId) {
             $repo = new SettingRepository($orm->getAdapter());
-            $existing = $repo->findResourceByModuleAndKey($moduleKey, $key);
+            $existing = $repo->findResourceByModuleAndKey($moduleKey, $key, $userId);
             if ($existing !== null) {
                 $repo->delete($existing);
             }
@@ -100,6 +153,11 @@ final class SettingsStore implements SettingsStoreInterface
     public function has(string $moduleKey, string $key): bool
     {
         return $this->get($moduleKey, $key) !== null;
+    }
+
+    public function hasForUser(string $moduleKey, string $key, string $userId): bool
+    {
+        return $this->getForUser($moduleKey, $key, $userId) !== null;
     }
 
     private function validateModuleKey(string $moduleKey): void

@@ -15,6 +15,7 @@ class SettingsSetPayload implements PayloadInterface
 {
     public string $module_key = '';
     public string $key = '';
+    public string $scope = 'user';
     public mixed $value = null;
 
     public function getModuleKey(): string
@@ -35,6 +36,17 @@ class SettingsSetPayload implements PayloadInterface
     public function setKey(string $key): void
     {
         $this->key = $key;
+    }
+
+    public function getScope(): string
+    {
+        $scope = strtolower(trim($this->scope));
+        return in_array($scope, ['user', 'global'], true) ? $scope : 'user';
+    }
+
+    public function setScope(string $scope): void
+    {
+        $this->scope = $scope;
     }
 
     public function getValue(): mixed

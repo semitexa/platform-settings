@@ -15,31 +15,33 @@ class SettingRepository extends AbstractRepository implements SettingRepositoryI
         return SettingResource::class;
     }
 
-    public function findByModuleAndKey(string $moduleKey, string $key): ?object
+    public function findByModuleAndKey(string $moduleKey, string $key, ?string $userId = null): ?object
     {
-        return $this->select()
+        $q = $this->select()
             ->where('module_key', '=', $moduleKey)
-            ->where('key', '=', $key)
-            ->fetchOne();
+            ->where('key', '=', $key);
+        $this->applyUserScope($q, $userId);
+        return $q->fetchOne();
     }
 
-    public function findResourceByModuleAndKey(string $moduleKey, string $key): ?SettingResource
+    public function findResourceByModuleAndKey(string $moduleKey, string $key, ?string $userId = null): ?SettingResource
     {
-        $resource = $this->select()
+        $q = $this->select()
             ->where('module_key', '=', $moduleKey)
-            ->where('key', '=', $key)
-            ->fetchOneAsResource();
+            ->where('key', '=', $key);
+        $this->applyUserScope($q, $userId);
+        $resource = $q->fetchOneAsResource();
         return $resource instanceof SettingResource ? $resource : null;
     }
 
     /**
      * @return object[]
      */
-    public function findAllByModule(string $moduleKey): array
+    public function findAllByModule(string $moduleKey, ?string $userId = null): array
     {
-        return $this->select()
-            ->where('module_key', '=', $moduleKey)
-            ->fetchAll();
+        $q = $this->select()->where('module_key', '=', $moduleKey);
+        $this->applyUserScope($q, $userId);
+        return $q->fetchAll();
     }
 
     /**
@@ -47,8 +49,19 @@ class SettingRepository extends AbstractRepository implements SettingRepositoryI
      *
      * @return object[]
      */
-    public function findAllSettings(int $limit = 500): array
+    public function findAllSettings(int $limit = 500, ?string $userId = null): array
     {
-        return $this->select()->limit($limit)->fetchAll();
+        $q = $this->select()->limit($limit);
+        $this->applyUserScope($q, $userId);
+        return $q->fetchAll();
+    }
+
+    private function applyUserScope(\Semitexa\Orm\Query\SelectQuery $q, ?string $userId): void
+    {
+        if ($userId === null || $userId === '') {
+            $q->whereNull('user_id');
+            return;
+        }
+        $q->where('user_id', '=', $userId);
     }
 }
