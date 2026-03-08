@@ -4,13 +4,13 @@ declare(strict_types=1);
 
 namespace Semitexa\Platform\Settings\Service;
 
-use Semitexa\Core\Attributes\AsServiceContract;
+use Semitexa\Core\Attributes\SatisfiesServiceContract;
 use Semitexa\Orm\OrmManager;
 use Semitexa\Platform\Settings\Application\Db\MySQL\Model\SettingResource;
 use Semitexa\Platform\Settings\Application\Db\MySQL\Repository\SettingRepository;
 use Semitexa\Platform\Settings\Contract\SettingsStoreInterface;
 
-#[AsServiceContract(of: SettingsStoreInterface::class)]
+#[SatisfiesServiceContract(of: SettingsStoreInterface::class)]
 final class SettingsStore implements SettingsStoreInterface
 {
     private const MODULE_KEY_MAX = 128;
