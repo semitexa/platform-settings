@@ -85,6 +85,10 @@ class SettingRepository extends AbstractRepository implements SettingRepositoryI
             throw new \InvalidArgumentException("Unsupported scope '{$scope}'");
         }
 
+        if ($userId === null || $userId === '') {
+            throw new \InvalidArgumentException("userId is required when scope is 'user'");
+        }
+
         $this->applyUserScope($q, $userId);
     }
 }
