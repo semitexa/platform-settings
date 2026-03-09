@@ -50,6 +50,11 @@ final class SettingsSetHandler implements HandlerInterface
                 }
                 $this->settings->setForUser($moduleKey, $key, $value, $this->auth->getUser()->getId());
             } else {
+                if ($this->auth->isGuest()) {
+                    return Response::json(['error' => 'Unauthorized'], 401);
+                }
+                // TODO: integrate with RbacServiceInterface to check 'platform.settings.manage_global' permission
+                // For now, global writes require authentication; full RBAC check to be added when cross-module ACL is available
                 $this->settings->set($moduleKey, $key, $value);
             }
         } catch (\InvalidArgumentException $e) {

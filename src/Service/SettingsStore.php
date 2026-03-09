@@ -152,12 +152,26 @@ final class SettingsStore implements SettingsStoreInterface
 
     public function has(string $moduleKey, string $key): bool
     {
-        return $this->get($moduleKey, $key) !== null;
+        return $this->existsByScope($moduleKey, $key, null);
     }
 
     public function hasForUser(string $moduleKey, string $key, string $userId): bool
     {
-        return $this->getForUser($moduleKey, $key, $userId) !== null;
+        if ($userId === '') {
+            throw new \InvalidArgumentException('userId is required');
+        }
+        return $this->existsByScope($moduleKey, $key, $userId);
+    }
+
+    private function existsByScope(string $moduleKey, string $key, ?string $userId): bool
+    {
+        $this->validateModuleKey($moduleKey);
+        $this->validateKey($key);
+
+        return OrmManager::run(function (OrmManager $orm) use ($moduleKey, $key, $userId) {
+            $repo = new SettingRepository($orm->getAdapter());
+            return $repo->findResourceByModuleAndKey($moduleKey, $key, $userId) !== null;
+        });
     }
 
     private function validateModuleKey(string $moduleKey): void

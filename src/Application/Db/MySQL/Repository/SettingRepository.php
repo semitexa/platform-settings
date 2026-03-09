@@ -58,7 +58,10 @@ class SettingRepository extends AbstractRepository implements SettingRepositoryI
 
     private function applyUserScope(\Semitexa\Orm\Query\SelectQuery $q, ?string $userId): void
     {
-        if ($userId === null || $userId === '') {
+        if ($userId === '') {
+            throw new \InvalidArgumentException('userId must not be empty string');
+        }
+        if ($userId === null) {
             $q->whereNull('user_id');
             return;
         }

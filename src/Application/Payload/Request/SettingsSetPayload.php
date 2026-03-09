@@ -41,7 +41,10 @@ class SettingsSetPayload implements PayloadInterface
     public function getScope(): string
     {
         $scope = strtolower(trim($this->scope));
-        return in_array($scope, ['user', 'global'], true) ? $scope : 'user';
+        if (!in_array($scope, ['user', 'global'], true)) {
+            throw new \InvalidArgumentException("Invalid scope '{$this->scope}'. Allowed: user, global");
+        }
+        return $scope;
     }
 
     public function setScope(string $scope): void
