@@ -17,7 +17,7 @@ use Semitexa\Platform\Settings\Domain\Model\Setting;
 
 #[FromTable(name: 'platform_settings', mapTo: Setting::class)]
 #[TenantScoped(strategy: 'same_storage')]
-#[Index(columns: ['tenant_id', 'module_key', 'key'], unique: true, name: 'uniq_platform_settings_tenant_module_key')]
+#[Index(columns: ['tenant_id', 'user_id', 'module_key', 'key'], unique: true, name: 'uniq_platform_settings_tenant_user_module_key')]
 class SettingResource implements DomainMappable
 {
     use HasUuidV7;
@@ -26,6 +26,10 @@ class SettingResource implements DomainMappable
     /** Injected by tenant scope when tenancy is enabled; null for global settings. */
     #[Column(type: MySqlType::Varchar, length: 64, nullable: true)]
     public ?string $tenant_id = null;
+
+    /** Null means global setting; non-null means personal setting for that user. */
+    #[Column(type: MySqlType::Varchar, length: 64, nullable: true)]
+    public ?string $user_id = null;
 
     #[Column(type: MySqlType::Varchar, length: 128)]
     public string $module_key = '';
@@ -40,6 +44,7 @@ class SettingResource implements DomainMappable
     {
         return new Setting(
             id: $this->id,
+            userId: $this->user_id,
             moduleKey: $this->module_key,
             key: $this->key,
             value: $this->value,
@@ -51,6 +56,7 @@ class SettingResource implements DomainMappable
         assert($entity instanceof Setting);
         $r = new static();
         $r->id = $entity->id;
+        $r->user_id = $entity->userId;
         $r->module_key = $entity->moduleKey;
         $r->key = $entity->key;
         $r->value = $entity->value;

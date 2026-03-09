@@ -8,19 +8,19 @@ use Semitexa\Platform\Settings\Application\Db\MySQL\Model\SettingResource;
 
 interface SettingRepositoryInterface
 {
-    public function findByModuleAndKey(string $moduleKey, string $key): ?object;
+    public function findByModuleAndKey(string $moduleKey, string $key, ?string $userId = null): ?object;
 
-    public function findResourceByModuleAndKey(string $moduleKey, string $key): ?SettingResource;
-
-    /**
-     * @return list<object>
-     */
-    public function findAllByModule(string $moduleKey): array;
+    public function findResourceByModuleAndKey(string $moduleKey, string $key, ?string $userId = null): ?SettingResource;
 
     /**
      * @return list<object>
      */
-    public function findAllSettings(int $limit = 500): array;
+    public function findAllByModule(string $moduleKey, ?string $userId = null): array;
+
+    /**
+     * @return list<object>
+     */
+    public function findAllSettings(int $limit = 500, string $scope = 'all', ?string $userId = null): array;
 
     public function save(object $resource): void;
 

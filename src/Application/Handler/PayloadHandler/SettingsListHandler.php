@@ -6,6 +6,7 @@ namespace Semitexa\Platform\Settings\Application\Handler\PayloadHandler;
 
 use Semitexa\Core\Attributes\AsPayloadHandler;
 use Semitexa\Core\Attributes\InjectAsReadonly;
+use Semitexa\Core\Auth\AuthContextInterface;
 use Semitexa\Core\Contract\HandlerInterface;
 use Semitexa\Core\Contract\PayloadInterface;
 use Semitexa\Core\Contract\ResourceInterface;
@@ -20,22 +21,36 @@ use Semitexa\Platform\Settings\Application\Db\MySQL\Repository\SettingRepository
 )]
 final class SettingsListHandler implements HandlerInterface
 {
+    #[InjectAsReadonly]
+    protected AuthContextInterface $auth;
+
     public function handle(PayloadInterface $payload, ResourceInterface $resource): ResourceInterface
     {
-        $list = OrmManager::run(function (OrmManager $orm) {
+        if (!$payload instanceof SettingsListPayload) {
+            return Response::json(['error' => 'Invalid payload'], 400);
+        }
+
+        $scope = $payload->getScope();
+        $moduleKey = $payload->getModuleKey();
+        $userId = ($scope === 'user' && !$this->auth->isGuest()) ? $this->auth->getUser()->getId() : null;
+
+        $list = OrmManager::run(function (OrmManager $orm) use ($moduleKey, $userId, $scope) {
             $repo = new SettingRepository($orm->getAdapter());
-            $rows = $repo->findAllSettings();
+            $rows = $moduleKey !== ''
+                ? $repo->findAllByModule($moduleKey, $userId)
+                : $repo->findAllSettings(500, $scope === 'user' ? 'user' : 'global', $userId);
             $out = [];
             foreach ($rows as $s) {
                 $out[] = [
                     'module_key' => $s->moduleKey,
                     'key' => $s->key,
                     'value' => $s->value === '' ? null : json_decode($s->value, true, 512, \JSON_THROW_ON_ERROR),
+                    'scope' => $s->userId === null ? 'global' : 'user',
                 ];
             }
             return $out;
         });
 
-        return Response::json(['settings' => $list]);
+        return Response::json(['scope' => $scope, 'settings' => $list]);
     }
 }
