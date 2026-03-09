@@ -38,7 +38,7 @@ final class SettingsListHandler implements HandlerInterface
             $repo = new SettingRepository($orm->getAdapter());
             $rows = $moduleKey !== ''
                 ? $repo->findAllByModule($moduleKey, $userId)
-                : $repo->findAllSettings(500, $userId);
+                : $repo->findAllSettings(500, $scope === 'user' ? 'user' : 'global', $userId);
             $out = [];
             foreach ($rows as $s) {
                 $out[] = [

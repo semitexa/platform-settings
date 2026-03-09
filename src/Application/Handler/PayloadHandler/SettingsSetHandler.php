@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Platform\Settings\Application\Handler\PayloadHandler;
 
+use Psr\Container\ContainerInterface;
 use Semitexa\Core\Attributes\AsPayloadHandler;
 use Semitexa\Core\Attributes\InjectAsReadonly;
 use Semitexa\Core\Auth\AuthContextInterface;
@@ -22,6 +23,9 @@ final class SettingsSetHandler implements HandlerInterface
 {
     #[InjectAsReadonly]
     protected AuthContextInterface $auth;
+
+    #[InjectAsReadonly]
+    protected ?ContainerInterface $container = null;
 
     public function __construct(
         private readonly SettingsStoreInterface $settings,
@@ -53,8 +57,9 @@ final class SettingsSetHandler implements HandlerInterface
                 if ($this->auth->isGuest()) {
                     return Response::json(['error' => 'Unauthorized'], 401);
                 }
-                // TODO: integrate with RbacServiceInterface to check 'platform.settings.manage_global' permission
-                // For now, global writes require authentication; full RBAC check to be added when cross-module ACL is available
+                if (!$this->canManageGlobalSettings()) {
+                    return Response::json(['error' => 'Forbidden'], 403);
+                }
                 $this->settings->set($moduleKey, $key, $value);
             }
         } catch (\InvalidArgumentException $e) {
@@ -62,5 +67,28 @@ final class SettingsSetHandler implements HandlerInterface
         }
 
         return Response::json(['ok' => true, 'scope' => $scope]);
+    }
+
+    private function canManageGlobalSettings(): bool
+    {
+        if ($this->auth->isGuest()) {
+            return false;
+        }
+
+        try {
+            $rbacClass = 'Semitexa\\Platform\\User\\Domain\\Service\\RbacServiceInterface';
+            if (!interface_exists($rbacClass) && !class_exists($rbacClass)) {
+                return false;
+            }
+            $rbac = $this->container?->get($rbacClass);
+        } catch (\Throwable) {
+            $rbac = null;
+        }
+
+        if ($rbac === null) {
+            return false;
+        }
+
+        return $rbac->userHasPermission($this->auth->getUser()->getId(), 'platform.settings.manage_global');
     }
 }

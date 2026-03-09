@@ -49,10 +49,10 @@ class SettingRepository extends AbstractRepository implements SettingRepositoryI
      *
      * @return object[]
      */
-    public function findAllSettings(int $limit = 500, ?string $userId = null): array
+    public function findAllSettings(int $limit = 500, string $scope = 'all', ?string $userId = null): array
     {
         $q = $this->select()->limit($limit);
-        $this->applyUserScope($q, $userId);
+        $this->applyCollectionScope($q, $scope, $userId);
         return $q->fetchAll();
     }
 
@@ -66,5 +66,25 @@ class SettingRepository extends AbstractRepository implements SettingRepositoryI
             return;
         }
         $q->where('user_id', '=', $userId);
+    }
+
+    private function applyCollectionScope(\Semitexa\Orm\Query\SelectQuery $q, string $scope, ?string $userId): void
+    {
+        $scope = strtolower(trim($scope));
+
+        if ($scope === 'all') {
+            return;
+        }
+
+        if ($scope === 'global') {
+            $q->whereNull('user_id');
+            return;
+        }
+
+        if ($scope !== 'user') {
+            throw new \InvalidArgumentException("Unsupported scope '{$scope}'");
+        }
+
+        $this->applyUserScope($q, $userId);
     }
 }

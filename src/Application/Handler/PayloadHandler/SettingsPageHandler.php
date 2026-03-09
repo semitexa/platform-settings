@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Semitexa\Platform\Settings\Application\Handler\PayloadHandler;
 
+use Psr\Container\ContainerInterface;
 use Semitexa\Core\Attributes\AsPayloadHandler;
+use Semitexa\Core\Attributes\InjectAsReadonly;
+use Semitexa\Core\Auth\AuthContextInterface;
 use Semitexa\Core\Contract\HandlerInterface;
 use Semitexa\Core\Contract\PayloadInterface;
 use Semitexa\Core\Contract\ResourceInterface;
@@ -18,6 +21,12 @@ use Semitexa\Platform\Settings\Application\Payload\Request\SettingsPagePayload;
 )]
 final class SettingsPageHandler implements HandlerInterface
 {
+    #[InjectAsReadonly]
+    protected AuthContextInterface $auth;
+
+    #[InjectAsReadonly]
+    protected ?ContainerInterface $container = null;
+
     public function handle(PayloadInterface $payload, ResourceInterface $resource): ResourceInterface
     {
         ModuleRegistry::initialize();
@@ -35,6 +44,9 @@ final class SettingsPageHandler implements HandlerInterface
         }
         ksort($modules);
         $modulesJson = json_encode(array_values($modules), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        $canManageGlobal = $this->canManageGlobalSettings();
+        $canManageGlobalJson = $canManageGlobal ? 'true' : 'false';
+        $globalOptionHtml = $canManageGlobal ? '<option value="global">Global</option>' : '';
 
         $html = <<<HTML
 <!DOCTYPE html>
@@ -81,7 +93,7 @@ final class SettingsPageHandler implements HandlerInterface
             <label for="scope">Scope</label>
             <select id="scope">
                 <option value="user" selected>Personal</option>
-                <option value="global">Global</option>
+                {$globalOptionHtml}
             </select>
             <span id="scopeBadge" class="scope-badge">Personal</span>
         </div>
@@ -95,6 +107,7 @@ final class SettingsPageHandler implements HandlerInterface
     <script>
     (function() {
         var api = '/api/platform/settings';
+        var canManageGlobal = {$canManageGlobalJson};
         var moduleCatalog = $modulesJson;
         var presets = [
             { name: 'Default', value: '' },
@@ -105,7 +118,9 @@ final class SettingsPageHandler implements HandlerInterface
         ];
 
         function currentScope() {
-            return document.getElementById('scope').value || 'user';
+            var scope = document.getElementById('scope').value || 'user';
+            if (scope === 'global' && !canManageGlobal) return 'user';
+            return scope;
         }
         function refreshScopeBadge() {
             var scope = currentScope();
@@ -249,5 +264,28 @@ final class SettingsPageHandler implements HandlerInterface
 </html>
 HTML;
         return Response::html($html);
+    }
+
+    private function canManageGlobalSettings(): bool
+    {
+        if ($this->auth->isGuest()) {
+            return false;
+        }
+
+        try {
+            $rbacClass = 'Semitexa\\Platform\\User\\Domain\\Service\\RbacServiceInterface';
+            if (!interface_exists($rbacClass) && !class_exists($rbacClass)) {
+                return false;
+            }
+            $rbac = $this->container?->get($rbacClass);
+        } catch (\Throwable) {
+            $rbac = null;
+        }
+
+        if ($rbac === null) {
+            return false;
+        }
+
+        return $rbac->userHasPermission($this->auth->getUser()->getId(), 'platform.settings.manage_global');
     }
 }

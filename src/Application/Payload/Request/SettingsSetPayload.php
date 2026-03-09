@@ -15,7 +15,7 @@ class SettingsSetPayload implements PayloadInterface
 {
     public string $module_key = '';
     public string $key = '';
-    public string $scope = 'user';
+    public string $scope = 'global';
     public mixed $value = null;
 
     public function getModuleKey(): string
@@ -41,6 +41,9 @@ class SettingsSetPayload implements PayloadInterface
     public function getScope(): string
     {
         $scope = strtolower(trim($this->scope));
+        if ($scope === '') {
+            return 'global';
+        }
         if (!in_array($scope, ['user', 'global'], true)) {
             throw new \InvalidArgumentException("Invalid scope '{$this->scope}'. Allowed: user, global");
         }
