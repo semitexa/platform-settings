@@ -20,7 +20,7 @@ interface SettingRepositoryInterface
     /**
      * @return list<object>
      */
-    public function findAllSettings(int $limit = 500, ?string $userId = null): array;
+    public function findAllSettings(int $limit = 500, string $scope = 'all', ?string $userId = null): array;
 
     public function save(object $resource): void;
 
