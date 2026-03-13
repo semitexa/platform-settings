@@ -8,18 +8,16 @@ use Psr\Container\ContainerInterface;
 use Semitexa\Core\Attributes\AsPayloadHandler;
 use Semitexa\Core\Attributes\InjectAsReadonly;
 use Semitexa\Core\Auth\AuthContextInterface;
-use Semitexa\Core\Contract\HandlerInterface;
-use Semitexa\Core\Contract\PayloadInterface;
-use Semitexa\Core\Contract\ResourceInterface;
+use Semitexa\Core\Contract\TypedHandlerInterface;
+use Semitexa\Core\Http\Response\GenericResponse;
 use Semitexa\Core\ModuleRegistry;
-use Semitexa\Core\Response;
 use Semitexa\Platform\Settings\Application\Payload\Request\SettingsPagePayload;
 
 #[AsPayloadHandler(
     payload: SettingsPagePayload::class,
-    resource: \Semitexa\Core\Http\Response\GenericResponse::class,
+    resource: GenericResponse::class,
 )]
-final class SettingsPageHandler implements HandlerInterface
+final class SettingsPageHandler implements TypedHandlerInterface
 {
     #[InjectAsReadonly]
     protected AuthContextInterface $auth;
@@ -27,7 +25,7 @@ final class SettingsPageHandler implements HandlerInterface
     #[InjectAsReadonly]
     protected ?ContainerInterface $container = null;
 
-    public function handle(PayloadInterface $payload, ResourceInterface $resource): ResourceInterface
+    public function handle(SettingsPagePayload $payload, GenericResponse $resource): GenericResponse
     {
         ModuleRegistry::initialize();
         $modules = [];
@@ -263,7 +261,9 @@ final class SettingsPageHandler implements HandlerInterface
 </body>
 </html>
 HTML;
-        return Response::html($html);
+        $resource->setContent($html);
+        $resource->setHeader('Content-Type', 'text/html; charset=utf-8');
+        return $resource;
     }
 
     private function canManageGlobalSettings(): bool
