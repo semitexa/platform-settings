@@ -8,18 +8,18 @@ use Psr\Container\ContainerInterface;
 use Semitexa\Core\Attributes\AsPayloadHandler;
 use Semitexa\Core\Attributes\InjectAsReadonly;
 use Semitexa\Core\Auth\AuthContextInterface;
-use Semitexa\Core\Contract\HandlerInterface;
-use Semitexa\Core\Contract\PayloadInterface;
-use Semitexa\Core\Contract\ResourceInterface;
-use Semitexa\Core\Response;
+use Semitexa\Core\Contract\TypedHandlerInterface;
+use Semitexa\Core\Exception\AccessDeniedException;
+use Semitexa\Core\Exception\ValidationException;
+use Semitexa\Core\Http\Response\GenericResponse;
 use Semitexa\Platform\Settings\Application\Payload\Request\SettingsSetPayload;
 use Semitexa\Platform\Settings\Contract\SettingsStoreInterface;
 
 #[AsPayloadHandler(
     payload: SettingsSetPayload::class,
-    resource: \Semitexa\Core\Http\Response\GenericResponse::class,
+    resource: GenericResponse::class,
 )]
-final class SettingsSetHandler implements HandlerInterface
+final class SettingsSetHandler implements TypedHandlerInterface
 {
     #[InjectAsReadonly]
     protected AuthContextInterface $auth;
@@ -32,41 +32,38 @@ final class SettingsSetHandler implements HandlerInterface
     ) {
     }
 
-    public function handle(PayloadInterface $payload, ResourceInterface $resource): ResourceInterface
+    public function handle(SettingsSetPayload $payload, GenericResponse $resource): GenericResponse
     {
-        if (!$payload instanceof SettingsSetPayload) {
-            return Response::json(['error' => 'Invalid payload'], 400);
-        }
-
         $moduleKey = $payload->getModuleKey();
         $key = $payload->getKey();
         $value = $payload->getValue();
         $scope = $payload->getScope();
 
         if ($moduleKey === '' || $key === '') {
-            return Response::json(['error' => 'module_key and key are required'], 400);
-        }
-
-        try {
-            if ($scope === 'user') {
-                if ($this->auth->isGuest()) {
-                    return Response::json(['error' => 'Unauthorized'], 401);
-                }
-                $this->settings->setForUser($moduleKey, $key, $value, $this->auth->getUser()->getId());
-            } else {
-                if ($this->auth->isGuest()) {
-                    return Response::json(['error' => 'Unauthorized'], 401);
-                }
-                if (!$this->canManageGlobalSettings()) {
-                    return Response::json(['error' => 'Forbidden'], 403);
-                }
-                $this->settings->set($moduleKey, $key, $value);
+            $errors = [];
+            if ($moduleKey === '') {
+                $errors['module_key'][] = 'module_key is required';
             }
-        } catch (\InvalidArgumentException $e) {
-            return Response::json(['error' => $e->getMessage()], 400);
+            if ($key === '') {
+                $errors['key'][] = 'key is required';
+            }
+            throw new ValidationException($errors);
         }
 
-        return Response::json(['ok' => true, 'scope' => $scope]);
+        if ($scope === 'user') {
+            if ($this->auth->isGuest()) {
+                throw new AccessDeniedException('Authentication required to manage user settings.');
+            }
+            $this->settings->setForUser($moduleKey, $key, $value, $this->auth->getUser()->getId());
+        } else {
+            if (!$this->canManageGlobalSettings()) {
+                throw new AccessDeniedException('Insufficient permissions to manage global settings.');
+            }
+            $this->settings->set($moduleKey, $key, $value);
+        }
+
+        $resource->setContext(['ok' => true, 'scope' => $scope]);
+        return $resource;
     }
 
     private function canManageGlobalSettings(): bool

@@ -6,12 +6,11 @@ namespace Semitexa\Platform\Settings\Application\Payload\Request;
 
 use Semitexa\Core\Attributes\AsPayload;
 use Semitexa\Core\Attributes\RequiresAuth;
-use Semitexa\Core\Contract\PayloadInterface;
 use Semitexa\Core\Http\Response\GenericResponse;
 
 #[AsPayload(path: '/api/platform/settings', methods: ['POST'], responseWith: GenericResponse::class)]
 #[RequiresAuth]
-class SettingsSetPayload implements PayloadInterface
+class SettingsSetPayload
 {
     public string $module_key = '';
     public string $key = '';

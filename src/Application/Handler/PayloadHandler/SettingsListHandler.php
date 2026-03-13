@@ -7,29 +7,23 @@ namespace Semitexa\Platform\Settings\Application\Handler\PayloadHandler;
 use Semitexa\Core\Attributes\AsPayloadHandler;
 use Semitexa\Core\Attributes\InjectAsReadonly;
 use Semitexa\Core\Auth\AuthContextInterface;
-use Semitexa\Core\Contract\HandlerInterface;
-use Semitexa\Core\Contract\PayloadInterface;
-use Semitexa\Core\Contract\ResourceInterface;
-use Semitexa\Core\Response;
+use Semitexa\Core\Contract\TypedHandlerInterface;
+use Semitexa\Core\Http\Response\GenericResponse;
 use Semitexa\Orm\OrmManager;
 use Semitexa\Platform\Settings\Application\Payload\Request\SettingsListPayload;
 use Semitexa\Platform\Settings\Application\Db\MySQL\Repository\SettingRepository;
 
 #[AsPayloadHandler(
     payload: SettingsListPayload::class,
-    resource: \Semitexa\Core\Http\Response\GenericResponse::class,
+    resource: GenericResponse::class,
 )]
-final class SettingsListHandler implements HandlerInterface
+final class SettingsListHandler implements TypedHandlerInterface
 {
     #[InjectAsReadonly]
     protected AuthContextInterface $auth;
 
-    public function handle(PayloadInterface $payload, ResourceInterface $resource): ResourceInterface
+    public function handle(SettingsListPayload $payload, GenericResponse $resource): GenericResponse
     {
-        if (!$payload instanceof SettingsListPayload) {
-            return Response::json(['error' => 'Invalid payload'], 400);
-        }
-
         $scope = $payload->getScope();
         $moduleKey = $payload->getModuleKey();
         $userId = ($scope === 'user' && !$this->auth->isGuest()) ? $this->auth->getUser()->getId() : null;
@@ -51,6 +45,7 @@ final class SettingsListHandler implements HandlerInterface
             return $out;
         });
 
-        return Response::json(['scope' => $scope, 'settings' => $list]);
+        $resource->setContext(['scope' => $scope, 'settings' => $list]);
+        return $resource;
     }
 }
