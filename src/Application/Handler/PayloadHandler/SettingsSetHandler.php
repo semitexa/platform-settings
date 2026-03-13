@@ -51,6 +51,9 @@ final class SettingsSetHandler implements TypedHandlerInterface
         }
 
         if ($scope === 'user') {
+            if ($this->auth->isGuest()) {
+                throw new AccessDeniedException('Authentication required to manage user settings.');
+            }
             $this->settings->setForUser($moduleKey, $key, $value, $this->auth->getUser()->getId());
         } else {
             if (!$this->canManageGlobalSettings()) {
