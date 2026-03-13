@@ -40,7 +40,14 @@ final class SettingsSetHandler implements TypedHandlerInterface
         $scope = $payload->getScope();
 
         if ($moduleKey === '' || $key === '') {
-            throw new ValidationException(['module_key' => ['module_key and key are required']]);
+            $errors = [];
+            if ($moduleKey === '') {
+                $errors['module_key'][] = 'module_key is required';
+            }
+            if ($key === '') {
+                $errors['key'][] = 'key is required';
+            }
+            throw new ValidationException($errors);
         }
 
         if ($scope === 'user') {
