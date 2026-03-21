@@ -9,6 +9,7 @@ use Semitexa\Core\Attributes\AsPayloadHandler;
 use Semitexa\Core\Attributes\InjectAsReadonly;
 use Semitexa\Core\Auth\AuthContextInterface;
 use Semitexa\Core\Contract\TypedHandlerInterface;
+use Semitexa\Core\Exception\AccessDeniedException;
 use Semitexa\Core\Http\Response\GenericResponse;
 use Semitexa\Core\ModuleRegistry;
 use Semitexa\Platform\Settings\Application\Payload\Request\SettingsPagePayload;
@@ -27,6 +28,10 @@ final class SettingsPageHandler implements TypedHandlerInterface
 
     public function handle(SettingsPagePayload $payload, GenericResponse $resource): GenericResponse
     {
+        if ($this->auth->isGuest()) {
+            throw new AccessDeniedException('Authentication required to view settings.');
+        }
+
         ModuleRegistry::initialize();
         $modules = [];
         foreach (ModuleRegistry::getModules() as $module) {
