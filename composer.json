@@ -1,6 +1,6 @@
 {
     "name": "semitexa/platform-settings",
-    "description": "Semitexa Platform Settings \u2014 system settings store for modules (multi-tenant aware)",
+    "description": "Semitexa Platform Settings system settings store for modules (multi-tenant aware)",
     "type": "semitexa-module",
     "license": "MIT",
     "authors": [
@@ -31,8 +31,8 @@
         "semitexa",
         "platform",
         "settings",
-        "mysql",
-        "schema",
-        "attributes"
+        "configuration",
+        "key-value",
+        "tenancy"
     ]
 }
