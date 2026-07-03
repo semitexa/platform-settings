@@ -1,40 +1,24 @@
-# Semitexa Platform Settings
+# semitexa/platform-settings
 
-System settings store for modules. Any module can persist its own key-value settings. **Multi-tenant aware**: when tenancy is enabled, settings are isolated per tenant (`tenant_id` is injected automatically).
+System settings store for modules with per-tenant isolation and WM desktop integration.
 
-## Usage in modules
+## Purpose
 
-Inject the contract and read/write by module key:
+Provides a key-value settings store scoped by module and optional tenant. Any module can persist its own configuration through `SettingsStoreInterface`. When tenancy is active, settings are automatically isolated per tenant.
 
-```php
-use Semitexa\Platform\Settings\Contract\SettingsStoreInterface;
+## Role in Semitexa
 
-// In your handler or service:
-$this->settings->set('my-module', 'theme', 'dark');
-$theme = $this->settings->get('my-module', 'theme');
-$all = $this->settings->getAll('my-module');
-$this->settings->remove('my-module', 'theme');
-```
+Depends on Core, ORM, and Platform WM. Used by platform modules to store runtime configuration. Exposes a WM desktop app for browsing settings across modules.
 
-- **module_key**: e.g. `platform-user`, `platform-wm` — identifies the owning module (max 128 chars).
-- **key**: setting name within the module (max 255 chars).
-- **value**: any JSON-serializable value (scalar, array, object).
+## Key Features
 
-## WM app
+- `SettingsStoreInterface` contract: `get`, `set`, `getAll`, `remove` per module key
+- Automatic tenant isolation via `tenant_id` scoping
+- JSON-serializable values (scalar, array, object)
+- ORM-backed persistence (`platform_settings` table, auto-synced via `orm:sync`)
+- System Settings WM app for desktop browsing (read-only overview)
+- Global fallback when tenancy is disabled (`tenant_id = NULL`)
 
-The **System Settings** app appears on the platform desktop (icon ⚙). It opens `/platform/settings` and lists all stored settings grouped by module (read-only overview). Modules use `SettingsStoreInterface` programmatically to read/write.
+## Notes
 
-## Database
-
-Table `platform_settings` is created/updated by the ORM sync. Run:
-
-```bash
-bin/semitexa orm:sync
-```
-
-(or `docker compose exec app php vendor/bin/semitexa orm:sync`). The collector discovers `SettingResource` (via `#[FromTable]`) and applies the schema diff.
-
-## Tenant behaviour
-
-- With **tenancy disabled** or no tenant resolved: `tenant_id` stays `NULL`; all settings are global.
-- With **tenancy enabled** and tenant resolved: `tenant_id` is set by the scope; each tenant has its own settings per (module_key, key).
+Settings are scoped by `(module_key, key, tenant_id)`. Module keys identify the owning package (e.g., `platform-user`, `platform-wm`). The WM app provides visibility but modules interact programmatically via the injected `SettingsStoreInterface`.
