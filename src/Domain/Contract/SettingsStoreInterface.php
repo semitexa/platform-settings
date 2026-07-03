@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Semitexa\Platform\Settings\Contract;
+namespace Semitexa\Platform\Settings\Domain\Contract;
 
 /**
  * Store and retrieve module-specific settings.
