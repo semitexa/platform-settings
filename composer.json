@@ -19,6 +19,11 @@
             "Semitexa\\Platform\\Settings\\": "src/"
         }
     },
+    "autoload-dev": {
+        "psr-4": {
+            "Semitexa\\Platform\\Settings\\Tests\\": "tests/"
+        }
+    },
     "extra": {
         "semitexa-module": {
             "name": "platform-settings",

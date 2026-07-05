@@ -58,6 +58,46 @@ final class SettingsStore implements SettingsStoreInterface
         $this->setByScope($moduleKey, $key, $value, $userId);
     }
 
+    public function claim(string $moduleKey, string $key, mixed $expected, mixed $next): bool
+    {
+        $this->validateModuleKey($moduleKey);
+        $this->validateKey($key);
+
+        $encodedNext = json_encode($next, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE | \JSON_UNESCAPED_SLASHES);
+        $now = (new \DateTimeImmutable())->format('Y-m-d H:i:s.u');
+
+        // Absent setting: seed it (best-effort — the first-ever write is not
+        // a contended path; the nullable-scope unique index treats NULLs as
+        // distinct, so a DB-level first-run claim is not available anyway).
+        if ($this->findResource($moduleKey, $key, null) === null) {
+            $this->setByScope($moduleKey, $key, $next, null);
+
+            return true;
+        }
+
+        // Existing setting: atomic compare-and-set. Only one concurrent caller
+        // whose $expected still matches the stored value performs the write.
+        // Each placeholder is bound once — native prepares reject a reused name.
+        $encodedExpected = json_encode($expected, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE | \JSON_UNESCAPED_SLASHES);
+        $result = $this->orm()->getAdapter()->execute(
+            'UPDATE `platform_settings`
+                SET value = :next_value, updated_at = :updated_at
+              WHERE module_key = :module_key
+                AND setting_key = :setting_key
+                AND user_id IS NULL
+                AND value = :expected_value',
+            [
+                'next_value' => $encodedNext,
+                'updated_at' => $now,
+                'module_key' => $moduleKey,
+                'setting_key' => $key,
+                'expected_value' => $encodedExpected,
+            ],
+        );
+
+        return $result->rowCount === 1;
+    }
+
     public function getAll(string $moduleKey): array
     {
         return $this->getAllByScope($moduleKey, null);
