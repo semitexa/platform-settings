@@ -6,7 +6,6 @@ namespace Semitexa\Platform\Settings\Application\Service;
 
 use Semitexa\Core\Attribute\InjectAsReadonly;
 use Semitexa\Core\Attribute\SatisfiesServiceContract;
-use Semitexa\Orm\Application\Service\Uuid7;
 use Semitexa\Orm\OrmManager;
 use Semitexa\Orm\Query\Operator;
 use Semitexa\Orm\Repository\DomainRepository;
@@ -146,40 +145,91 @@ final class SettingsStore implements SettingsStoreInterface
         return json_decode($resource->value, true, 512, \JSON_THROW_ON_ERROR);
     }
 
+    /**
+     * Write a setting, atomically. The old find-then-insert let two concurrent
+     * writers of the same NEW scope both see "no row" and both INSERT, creating
+     * DUPLICATE rows — the `uniq_platform_settings_scope` index cannot stop them
+     * because its `tenant_id`/`user_id` columns are NULL and MySQL treats NULLs
+     * as distinct in a unique index.
+     *
+     * Instead: UPDATE by scope first (atomic for any existing row, including the
+     * legacy random-id rows); if nothing matched, INSERT with a DETERMINISTIC
+     * scope-derived id, so two concurrent first-writers collide on the PRIMARY
+     * KEY (always enforced, NULL-independent) — the loser catches the violation
+     * and re-UPDATEs the now-present row. Portable across MySQL and SQLite
+     * (plain UPDATE + INSERT + PK-violation catch, no dialect-specific upsert).
+     */
     private function setByScope(string $moduleKey, string $key, mixed $value, ?string $userId): void
     {
         $this->validateModuleKey($moduleKey);
         $this->validateKey($key);
 
         $encoded = json_encode($value, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE | \JSON_UNESCAPED_SLASHES);
-        $now = new \DateTimeImmutable();
-        $existing = $this->findResource($moduleKey, $key, $userId);
+        $now = (new \DateTimeImmutable())->format('Y-m-d H:i:s.u');
 
-        if ($existing !== null) {
-            $this->repository()->update(new SettingResource(
-                id: $existing->id,
-                tenant_id: $existing->tenant_id,
-                user_id: $existing->user_id,
-                module_key: $existing->module_key,
-                setting_key: $existing->setting_key,
-                value: $encoded,
-                created_at: $existing->created_at,
-                updated_at: $now,
-            ));
-
+        if ($this->updateScopeValue($moduleKey, $key, $userId, $encoded, $now) > 0) {
             return;
         }
 
-        $this->repository()->insert(new SettingResource(
-            id: Uuid7::generate(),
-            tenant_id: null,
-            user_id: $userId,
-            module_key: $moduleKey,
-            setting_key: $key,
-            value: $encoded,
-            created_at: $now,
-            updated_at: $now,
-        ));
+        try {
+            $userClause = $userId === null ? 'NULL' : ':user_id';
+            $this->orm()->getAdapter()->execute(
+                "INSERT INTO `platform_settings`
+                    (id, tenant_id, user_id, module_key, setting_key, value, created_at, updated_at)
+                 VALUES (:id, NULL, {$userClause}, :module_key, :setting_key, :value, :created_at, :updated_at)",
+                array_merge(
+                    [
+                        'id' => self::scopeId($moduleKey, $key, $userId),
+                        'module_key' => $moduleKey,
+                        'setting_key' => $key,
+                        'value' => $encoded,
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ],
+                    $userId === null ? [] : ['user_id' => $userId],
+                ),
+            );
+        } catch (\Throwable) {
+            // Lost the first-write race: another writer inserted the same
+            // deterministic id first (PK violation). The row exists now — update it.
+            $this->updateScopeValue($moduleKey, $key, $userId, $encoded, $now);
+        }
+    }
+
+    /**
+     * Atomic UPDATE of a scope's value; returns affected rows (0 = no such row).
+     * Each placeholder is bound once — native prepares reject a reused name.
+     */
+    private function updateScopeValue(string $moduleKey, string $key, ?string $userId, string $encoded, string $now): int
+    {
+        $userClause = $userId === null ? 'user_id IS NULL' : 'user_id = :user_id';
+        $result = $this->orm()->getAdapter()->execute(
+            "UPDATE `platform_settings`
+                SET value = :value, updated_at = :updated_at
+              WHERE module_key = :module_key AND setting_key = :setting_key AND {$userClause}",
+            array_merge(
+                [
+                    'value' => $encoded,
+                    'updated_at' => $now,
+                    'module_key' => $moduleKey,
+                    'setting_key' => $key,
+                ],
+                $userId === null ? [] : ['user_id' => $userId],
+            ),
+        );
+
+        return $result->rowCount;
+    }
+
+    /**
+     * Deterministic id for a setting scope — the same (module, key, user) always
+     * hashes to the same 32-char id, so concurrent first-writers collide on the
+     * primary key instead of creating duplicate rows. Fits the Varchar(36) id
+     * column; distinct in shape from the legacy UUIDv7 ids, which stay valid.
+     */
+    private static function scopeId(string $moduleKey, string $key, ?string $userId): string
+    {
+        return substr(hash('sha256', ($userId ?? '') . "\0" . $moduleKey . "\0" . $key), 0, 32);
     }
 
     /**
