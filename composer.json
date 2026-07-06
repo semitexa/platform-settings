@@ -12,12 +12,16 @@
     "require": {
         "php": "^8.4",
         "semitexa/core": "*",
-        "semitexa/orm": "*",
-        "semitexa/platform-wm": "*"
+        "semitexa/orm": "*"
     },
     "autoload": {
         "psr-4": {
             "Semitexa\\Platform\\Settings\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Semitexa\\Platform\\Settings\\Tests\\": "tests/"
         }
     },
     "extra": {
