@@ -6,6 +6,8 @@ namespace Semitexa\Platform\Settings\Application\Service;
 
 use Semitexa\Core\Attribute\InjectAsReadonly;
 use Semitexa\Core\Attribute\SatisfiesServiceContract;
+use Semitexa\Core\Tenant\TenantContextAccess;
+use Semitexa\Core\Tenant\TenantContextStoreInterface;
 use Semitexa\Orm\OrmManager;
 use Semitexa\Orm\Query\Operator;
 use Semitexa\Orm\Repository\DomainRepository;
@@ -32,7 +34,22 @@ final class SettingsStore implements SettingsStoreInterface
     #[InjectAsReadonly]
     protected OrmManager $orm;
 
+    /**
+     * Ambient-tenant seam (coroutine-local), resolved AT CALL TIME so this
+     * shared singleton stays per-request-correct. Mirrors CalendarEventDbRepository.
+     */
+    #[InjectAsReadonly]
+    protected TenantContextStoreInterface $tenantContextStore;
+
     private ?DomainRepository $repository = null;
+
+    /** Test seam — production path uses property injection. */
+    public function withTenantContextStore(TenantContextStoreInterface $store): self
+    {
+        $this->tenantContextStore = $store;
+
+        return $this;
+    }
 
     public function get(string $moduleKey, string $key): mixed
     {
@@ -81,13 +98,15 @@ final class SettingsStore implements SettingsStoreInterface
         $result = $this->orm()->getAdapter()->execute(
             'UPDATE `platform_settings`
                 SET value = :next_value, updated_at = :updated_at
-              WHERE module_key = :module_key
+              WHERE tenant_id = :tenant_id
+                AND module_key = :module_key
                 AND setting_key = :setting_key
                 AND user_id IS NULL
                 AND value = :expected_value',
             [
                 'next_value' => $encodedNext,
                 'updated_at' => $now,
+                'tenant_id' => $this->currentTenantId(),
                 'module_key' => $moduleKey,
                 'setting_key' => $key,
                 'expected_value' => $encodedExpected,
@@ -176,10 +195,11 @@ final class SettingsStore implements SettingsStoreInterface
             $this->orm()->getAdapter()->execute(
                 "INSERT INTO `platform_settings`
                     (id, tenant_id, user_id, module_key, setting_key, value, created_at, updated_at)
-                 VALUES (:id, NULL, {$userClause}, :module_key, :setting_key, :value, :created_at, :updated_at)",
+                 VALUES (:id, :tenant_id, {$userClause}, :module_key, :setting_key, :value, :created_at, :updated_at)",
                 array_merge(
                     [
-                        'id' => self::scopeId($moduleKey, $key, $userId),
+                        'id' => self::scopeId($this->currentTenantId(), $moduleKey, $key, $userId),
+                        'tenant_id' => $this->currentTenantId(),
                         'module_key' => $moduleKey,
                         'setting_key' => $key,
                         'value' => $encoded,
@@ -206,11 +226,12 @@ final class SettingsStore implements SettingsStoreInterface
         $result = $this->orm()->getAdapter()->execute(
             "UPDATE `platform_settings`
                 SET value = :value, updated_at = :updated_at
-              WHERE module_key = :module_key AND setting_key = :setting_key AND {$userClause}",
+              WHERE tenant_id = :tenant_id AND module_key = :module_key AND setting_key = :setting_key AND {$userClause}",
             array_merge(
                 [
                     'value' => $encoded,
                     'updated_at' => $now,
+                    'tenant_id' => $this->currentTenantId(),
                     'module_key' => $moduleKey,
                     'setting_key' => $key,
                 ],
@@ -227,9 +248,9 @@ final class SettingsStore implements SettingsStoreInterface
      * primary key instead of creating duplicate rows. Fits the Varchar(36) id
      * column; distinct in shape from the legacy UUIDv7 ids, which stay valid.
      */
-    private static function scopeId(string $moduleKey, string $key, ?string $userId): string
+    private static function scopeId(string $tenantId, string $moduleKey, string $key, ?string $userId): string
     {
-        return substr(hash('sha256', ($userId ?? '') . "\0" . $moduleKey . "\0" . $key), 0, 32);
+        return substr(hash('sha256', $tenantId . "\0" . ($userId ?? '') . "\0" . $moduleKey . "\0" . $key), 0, 32);
     }
 
     /**
@@ -239,7 +260,7 @@ final class SettingsStore implements SettingsStoreInterface
     {
         $this->validateModuleKey($moduleKey);
 
-        $query = $this->repository()->query()
+        $query = $this->scoped()->query()
             ->where(SettingResource::column('module_key'), Operator::Equals, $moduleKey);
         $this->applyUserScope($query, $userId);
 
@@ -263,7 +284,7 @@ final class SettingsStore implements SettingsStoreInterface
 
         $existing = $this->findResource($moduleKey, $key, $userId);
         if ($existing !== null) {
-            $this->repository()->delete($existing);
+            $this->scoped()->delete($existing);
         }
     }
 
@@ -277,7 +298,7 @@ final class SettingsStore implements SettingsStoreInterface
 
     private function findResource(string $moduleKey, string $key, ?string $userId): ?SettingResource
     {
-        $query = $this->repository()->query()
+        $query = $this->scoped()->query()
             ->where(SettingResource::column('module_key'), Operator::Equals, $moduleKey)
             ->where(SettingResource::column('setting_key'), Operator::Equals, $key);
         $this->applyUserScope($query, $userId);
@@ -297,6 +318,23 @@ final class SettingsStore implements SettingsStoreInterface
         }
 
         $query->where(SettingResource::column('user_id'), Operator::Equals, $userId);
+    }
+
+    /** Repository bound to the ambient tenant — the ORM gate filters every query. */
+    private function scoped(): DomainRepository
+    {
+        return $this->repository()->forTenant($this->currentTenantId());
+    }
+
+    /**
+     * Current tenant id, or the 'default' sentinel — never null, so the
+     * fail-closed tenant filter and every raw-SQL WHERE bind a concrete value.
+     */
+    private function currentTenantId(): string
+    {
+        $context = isset($this->tenantContextStore) ? $this->tenantContextStore->tryGet() : null;
+
+        return TenantContextAccess::tenantIdOrDefault($context);
     }
 
     private function repository(): DomainRepository

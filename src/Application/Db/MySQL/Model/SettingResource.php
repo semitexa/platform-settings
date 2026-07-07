@@ -9,6 +9,7 @@ use Semitexa\Orm\Attribute\Column;
 use Semitexa\Orm\Attribute\FromTable;
 use Semitexa\Orm\Attribute\Index;
 use Semitexa\Orm\Attribute\PrimaryKey;
+use Semitexa\Orm\Attribute\TenantScoped;
 use Semitexa\Orm\Metadata\HasColumnReferences;
 use Semitexa\Orm\Metadata\HasRelationReferences;
 
@@ -30,6 +31,7 @@ use Semitexa\Orm\Metadata\HasRelationReferences;
  */
 #[FromTable(name: 'platform_settings')]
 #[Index(columns: ['tenant_id', 'user_id', 'module_key', 'setting_key'], unique: true, name: 'uniq_platform_settings_scope')]
+#[TenantScoped(strategy: 'same_storage', column: 'tenant_id')]
 final readonly class SettingResource
 {
     use HasColumnReferences;
@@ -40,7 +42,7 @@ final readonly class SettingResource
         #[Column(type: MySqlType::Varchar, length: 36)]
         public string $id,
 
-        /** Reserved for multi-tenant scoping (schema-ready); null until tenancy is wired. */
+        /** Owning tenant; the ORM tenant gate filters every query-builder read by this. */
         #[Column(type: MySqlType::Varchar, length: 64, nullable: true)]
         public ?string $tenant_id,
 
