@@ -161,6 +161,90 @@ final class SettingsQueryBudgetTest extends TestCase
     }
 
     #[Test]
+    public function a_losing_claim_does_not_leave_the_pre_race_row_cached(): void
+    {
+        // Review finding: claim() refreshes the cache through its useCache:false read, so
+        // invalidating only on the winning branch left a LOST claim serving the pre-race
+        // value to the next get() in the same request.
+        $this->store->set('os', 'lock', 'free');
+
+        self::assertFalse($this->store->claim('os', 'lock', 'WRONG_EXPECTED', 'taken'));
+        $this->writeBehindTheStoresBack('os', 'lock', 'changed_elsewhere');
+
+        self::assertSame(
+            'changed_elsewhere',
+            $this->store->get('os', 'lock'),
+            'a failed claim must not pin the value it read',
+        );
+    }
+
+    #[Test]
+    public function a_removal_is_not_decided_from_a_cached_absence(): void
+    {
+        // Review finding: has() caches "not there"; if another request inserts the row,
+        // remove() used to read that cached absence and silently delete nothing.
+        self::assertFalse($this->store->has('os', 'ghost'));
+
+        $this->writeBehindTheStoresBack('os', 'ghost', 'appeared');
+
+        $this->store->remove('os', 'ghost');
+
+        self::assertNull($this->store->get('os', 'ghost'), 'the row inserted meanwhile must still be removed');
+        self::assertSame(0, $this->countRows('os', 'ghost'));
+    }
+
+    #[Test]
+    public function a_user_id_cannot_impersonate_the_global_scope(): void
+    {
+        // Review finding: with the scope defaulted to a bare sentinel, a user whose id IS
+        // that sentinel shared a cache key with the global scope, and the two hold
+        // different rows.
+        $this->store->set('os', 'skin', 'global-value');
+        $this->store->setForUser('os', 'skin', 'personal-value', '-');
+
+        self::assertSame('global-value', $this->store->get('os', 'skin'));
+        self::assertSame('personal-value', $this->store->getForUser('os', 'skin', '-'));
+
+        // And in the other order, so neither scope can prime the key for the other.
+        self::assertSame('personal-value', $this->store->getForUser('os', 'skin', '-'));
+        self::assertSame('global-value', $this->store->get('os', 'skin'));
+    }
+
+    /** Simulate another request writing the row while this one holds a cached view. */
+    private function writeBehindTheStoresBack(string $moduleKey, string $key, string $value): void
+    {
+        $orm = (new \ReflectionProperty(SettingsStore::class, 'orm'))->getValue($this->store);
+        $orm->getAdapter()->execute(
+            'DELETE FROM platform_settings WHERE module_key = :m AND setting_key = :k AND user_id IS NULL',
+            ['m' => $moduleKey, 'k' => $key],
+        );
+        $orm->getAdapter()->execute(
+            'INSERT INTO platform_settings (id, tenant_id, user_id, module_key, setting_key, value, created_at, updated_at)
+             VALUES (:id, :t, NULL, :m, :k, :v, :c, :u)',
+            [
+                'id' => 'behind-' . $moduleKey . '-' . $key,
+                't' => 'acme',
+                'm' => $moduleKey,
+                'k' => $key,
+                'v' => json_encode($value),
+                'c' => '2026-01-01 00:00:00',
+                'u' => '2026-01-01 00:00:00',
+            ],
+        );
+    }
+
+    private function countRows(string $moduleKey, string $key): int
+    {
+        $orm = (new \ReflectionProperty(SettingsStore::class, 'orm'))->getValue($this->store);
+        $rows = $orm->getAdapter()->execute(
+            'SELECT COUNT(*) AS c FROM platform_settings WHERE module_key = :m AND setting_key = :k',
+            ['m' => $moduleKey, 'k' => $key],
+        )->fetchAll();
+
+        return (int) ($rows[0]['c'] ?? -1);
+    }
+
+    #[Test]
     public function compare_and_set_reads_the_row_and_not_the_cache(): void
     {
         // claim() is the concurrency primitive here. Answering it from a value this request

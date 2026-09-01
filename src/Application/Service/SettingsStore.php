@@ -52,11 +52,11 @@ final class SettingsStore implements SettingsStoreInterface
      */
     private const CACHE_KEY = 'platform_settings.request_reads';
 
-    /**
-     * Marks "looked it up, there is no row". Without it every `has()` on an absent setting
-     * keeps paying, which is the shape most likely to be called in a loop.
-     */
-    private const ABSENT = '__semitexa_absent__';
+    // An absent row is cached as a plain null; presence is decided by array_key_exists, so
+    // no sentinel is needed. An earlier version used one and widened the cache's value type
+    // to SettingResource|string, which PHPStan correctly flagged: nothing then guaranteed
+    // the only string in there was the sentinel. Caching the absence still matters - has()
+    // on a missing key is the shape most likely to sit in a loop.
 
     #[InjectAsReadonly]
     protected OrmManager $orm;
@@ -142,9 +142,10 @@ final class SettingsStore implements SettingsStoreInterface
             ],
         );
 
-        if ($result->rowCount === 1) {
-            $this->forgetRead($moduleKey, $key, null);
-        }
+        // Unconditionally, not only on the winning branch: the findResource() above ran with
+        // useCache: false but still refreshed the cache, so a LOSING claim would otherwise
+        // leave the pre-race row cached and hand it to a later get() in this same request.
+        $this->forgetRead($moduleKey, $key, null);
 
         return $result->rowCount === 1;
     }
@@ -322,11 +323,13 @@ final class SettingsStore implements SettingsStoreInterface
         $this->validateModuleKey($moduleKey);
         $this->validateKey($key);
 
-        $existing = $this->findResource($moduleKey, $key, $userId);
+        // useCache: false — a delete decided from a cached absence silently does nothing
+        // when another request inserted the row after this one cached "not there".
+        $existing = $this->findResource($moduleKey, $key, $userId, useCache: false);
         if ($existing !== null) {
             $this->scoped()->delete($existing);
-            $this->forgetRead($moduleKey, $key, $userId);
         }
+        $this->forgetRead($moduleKey, $key, $userId);
     }
 
     private function existsByScope(string $moduleKey, string $key, ?string $userId): bool
@@ -348,12 +351,10 @@ final class SettingsStore implements SettingsStoreInterface
     ): ?SettingResource {
         $cacheKey = $this->readCacheKey($moduleKey, $key, $userId);
         if ($useCache) {
-            /** @var array<string, SettingResource|string> $cache */
+            /** @var array<string, SettingResource|null> $cache */
             $cache = CoroutineLocal::get(self::CACHE_KEY, []);
             if (array_key_exists($cacheKey, $cache)) {
-                $hit = $cache[$cacheKey];
-
-                return $hit === self::ABSENT ? null : $hit;
+                return $cache[$cacheKey];
             }
         }
 
@@ -382,21 +383,28 @@ final class SettingsStore implements SettingsStoreInterface
         // currentTenantId() is documented as never null - it returns the 'default'
         // sentinel instead - so coalescing here would imply a nullability the method
         // deliberately does not have. Only $userId is genuinely optional.
-        return $this->currentTenantId() . "\0" . ($userId ?? '-') . "\0" . $moduleKey . "\0" . $key;
+        //
+        // The user scope is TAGGED rather than defaulted: a bare sentinel collides with a
+        // real user whose id happens to equal it, and the two scopes hold different rows,
+        // so the collision would serve a personal setting as the global one. 'g' can never
+        // collide with 'u:' + anything.
+        $scope = $userId === null ? 'g' : 'u:' . $userId;
+
+        return $this->currentTenantId() . "\0" . $scope . "\0" . $moduleKey . "\0" . $key;
     }
 
     private function rememberRead(string $cacheKey, ?SettingResource $resource): void
     {
-        /** @var array<string, SettingResource|string> $cache */
+        /** @var array<string, SettingResource|null> $cache */
         $cache = CoroutineLocal::get(self::CACHE_KEY, []);
-        $cache[$cacheKey] = $resource ?? self::ABSENT;
+        $cache[$cacheKey] = $resource;
         CoroutineLocal::set(self::CACHE_KEY, $cache);
     }
 
     /** Drop one scope after a write, so the next read in this request sees what it wrote. */
     private function forgetRead(string $moduleKey, string $key, ?string $userId): void
     {
-        /** @var array<string, SettingResource|string> $cache */
+        /** @var array<string, SettingResource|null> $cache */
         $cache = CoroutineLocal::get(self::CACHE_KEY, []);
         unset($cache[$this->readCacheKey($moduleKey, $key, $userId)]);
         CoroutineLocal::set(self::CACHE_KEY, $cache);
