@@ -6,6 +6,7 @@ namespace Semitexa\Platform\Settings\Application\Service;
 
 use Semitexa\Core\Attribute\InjectAsReadonly;
 use Semitexa\Core\Attribute\SatisfiesServiceContract;
+use Semitexa\Core\Support\CoroutineLocal;
 use Semitexa\Core\Tenant\TenantContextAccess;
 use Semitexa\Core\Tenant\TenantContextStoreInterface;
 use Semitexa\Orm\OrmManager;
@@ -30,6 +31,32 @@ final class SettingsStore implements SettingsStoreInterface
 {
     private const MODULE_KEY_MAX = 128;
     private const KEY_MAX = 255;
+
+    /**
+     * Where the per-request read cache lives.
+     *
+     * MEASURED before this existed: one GET / (OsShellPayload) issued 18 queries and 17 of
+     * them were this table, the same statement each time — 94% of the request's database
+     * work spent re-answering questions it had already answered. At ~0.2 ms a round trip
+     * no slow-query threshold can ever see it; the cost is the count, not the duration.
+     *
+     * In {@see CoroutineLocal} and NOT an instance property, which would be the obvious
+     * place and would be a data leak: this store is a shared `#[AsService]` singleton and
+     * these rows are tenant-scoped, so an instance cache would serve one tenant's settings
+     * to the next request on the same worker. Same reasoning, and the same shape, as
+     * {@see \Semitexa\Rbac\Application\Service\RbacDecisionCache}.
+     *
+     * Scope is one request by construction, so a value written by another process mid-request
+     * is not picked up until the next one. That is what per-request caching means, and it is
+     * the same staleness window the request already had between its own first and last read.
+     */
+    private const CACHE_KEY = 'platform_settings.request_reads';
+
+    /**
+     * Marks "looked it up, there is no row". Without it every `has()` on an absent setting
+     * keeps paying, which is the shape most likely to be called in a loop.
+     */
+    private const ABSENT = '__semitexa_absent__';
 
     #[InjectAsReadonly]
     protected OrmManager $orm;
@@ -85,7 +112,9 @@ final class SettingsStore implements SettingsStoreInterface
         // Absent setting: seed it (best-effort — the first-ever write is not
         // a contended path; the nullable-scope unique index treats NULLs as
         // distinct, so a DB-level first-run claim is not available anyway).
-        if ($this->findResource($moduleKey, $key, null) === null) {
+        // useCache: false — this is compare-and-set. Deciding "seed it" from a value this
+        // request read earlier would make the primitive answer about the past.
+        if ($this->findResource($moduleKey, $key, null, useCache: false) === null) {
             $this->setByScope($moduleKey, $key, $next, null);
 
             return true;
@@ -112,6 +141,10 @@ final class SettingsStore implements SettingsStoreInterface
                 'expected_value' => $encodedExpected,
             ],
         );
+
+        if ($result->rowCount === 1) {
+            $this->forgetRead($moduleKey, $key, null);
+        }
 
         return $result->rowCount === 1;
     }
@@ -187,6 +220,8 @@ final class SettingsStore implements SettingsStoreInterface
         $now = (new \DateTimeImmutable())->format('Y-m-d H:i:s.u');
 
         if ($this->updateScopeValue($moduleKey, $key, $userId, $encoded, $now) > 0) {
+            $this->forgetRead($moduleKey, $key, $userId);
+
             return;
         }
 
@@ -214,6 +249,11 @@ final class SettingsStore implements SettingsStoreInterface
             // deterministic id first (PK violation). The row exists now — update it.
             $this->updateScopeValue($moduleKey, $key, $userId, $encoded, $now);
         }
+
+        // Both remaining paths wrote: the fresh INSERT and the lost-race UPDATE. Anything
+        // this request read for the scope beforehand — including a cached "absent" — is
+        // now wrong.
+        $this->forgetRead($moduleKey, $key, $userId);
     }
 
     /**
@@ -285,6 +325,7 @@ final class SettingsStore implements SettingsStoreInterface
         $existing = $this->findResource($moduleKey, $key, $userId);
         if ($existing !== null) {
             $this->scoped()->delete($existing);
+            $this->forgetRead($moduleKey, $key, $userId);
         }
     }
 
@@ -296,8 +337,26 @@ final class SettingsStore implements SettingsStoreInterface
         return $this->findResource($moduleKey, $key, $userId) !== null;
     }
 
-    private function findResource(string $moduleKey, string $key, ?string $userId): ?SettingResource
-    {
+    /**
+     * @param bool $useCache false only for compare-and-set, which must read the real row
+     */
+    private function findResource(
+        string $moduleKey,
+        string $key,
+        ?string $userId,
+        bool $useCache = true,
+    ): ?SettingResource {
+        $cacheKey = $this->readCacheKey($moduleKey, $key, $userId);
+        if ($useCache) {
+            /** @var array<string, SettingResource|string> $cache */
+            $cache = CoroutineLocal::get(self::CACHE_KEY, []);
+            if (array_key_exists($cacheKey, $cache)) {
+                $hit = $cache[$cacheKey];
+
+                return $hit === self::ABSENT ? null : $hit;
+            }
+        }
+
         $query = $this->scoped()->query()
             ->where(SettingResource::column('module_key'), Operator::Equals, $moduleKey)
             ->where(SettingResource::column('setting_key'), Operator::Equals, $key);
@@ -306,7 +365,38 @@ final class SettingsStore implements SettingsStoreInterface
         /** @var SettingResource|null $resource */
         $resource = $query->fetchOneAs(SettingResource::class, $this->orm()->getMapperRegistry());
 
+        // Populated even when the caller asked to bypass: a fresh read is still the truth,
+        // and leaving the stale entry behind would serve it to the next reader.
+        $this->rememberRead($cacheKey, $resource);
+
         return $resource;
+    }
+
+    /**
+     * Cache identity. The tenant belongs in the key even though the store is already
+     * tenant-scoped at the query level: tenant fan-out walks several tenants inside one
+     * coroutine, so a key without it would hand tenant B the row it read for tenant A.
+     */
+    private function readCacheKey(string $moduleKey, string $key, ?string $userId): string
+    {
+        return ($this->currentTenantId() ?? '-') . "\0" . ($userId ?? '-') . "\0" . $moduleKey . "\0" . $key;
+    }
+
+    private function rememberRead(string $cacheKey, ?SettingResource $resource): void
+    {
+        /** @var array<string, SettingResource|string> $cache */
+        $cache = CoroutineLocal::get(self::CACHE_KEY, []);
+        $cache[$cacheKey] = $resource ?? self::ABSENT;
+        CoroutineLocal::set(self::CACHE_KEY, $cache);
+    }
+
+    /** Drop one scope after a write, so the next read in this request sees what it wrote. */
+    private function forgetRead(string $moduleKey, string $key, ?string $userId): void
+    {
+        /** @var array<string, SettingResource|string> $cache */
+        $cache = CoroutineLocal::get(self::CACHE_KEY, []);
+        unset($cache[$this->readCacheKey($moduleKey, $key, $userId)]);
+        CoroutineLocal::set(self::CACHE_KEY, $cache);
     }
 
     private function applyUserScope(object $query, ?string $userId): void
