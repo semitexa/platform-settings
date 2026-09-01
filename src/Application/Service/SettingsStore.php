@@ -379,7 +379,10 @@ final class SettingsStore implements SettingsStoreInterface
      */
     private function readCacheKey(string $moduleKey, string $key, ?string $userId): string
     {
-        return ($this->currentTenantId() ?? '-') . "\0" . ($userId ?? '-') . "\0" . $moduleKey . "\0" . $key;
+        // currentTenantId() is documented as never null - it returns the 'default'
+        // sentinel instead - so coalescing here would imply a nullability the method
+        // deliberately does not have. Only $userId is genuinely optional.
+        return $this->currentTenantId() . "\0" . ($userId ?? '-') . "\0" . $moduleKey . "\0" . $key;
     }
 
     private function rememberRead(string $cacheKey, ?SettingResource $resource): void
