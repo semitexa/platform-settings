@@ -7,34 +7,43 @@ namespace Semitexa\Platform\Settings\Application\Db\MySQL\Mapper;
 use Semitexa\Orm\Attribute\AsMapper;
 use Semitexa\Orm\Domain\Contract\ResourceModelMapperInterface;
 use Semitexa\Platform\Settings\Application\Db\MySQL\Model\SettingResource;
+use Semitexa\Platform\Settings\Domain\Model\Setting;
 
-/**
- * Self-mapping mapper for {@see SettingResource}.
- *
- * The settings row lines up 1:1 with the store's needs, so there is no separate
- * mutable domain model — resource IS the domain model and both directions are
- * clone-passthroughs (the same trivial-shape convention as the platform-ui and
- * scheduler resources).
- */
-#[AsMapper(
-    resourceModel: SettingResource::class,
-    domainModel: SettingResource::class,
-)]
+/** The bridge between the MySQL row and the setting the store reasons about. */
+#[AsMapper(resourceModel: SettingResource::class, domainModel: Setting::class)]
 final class SettingMapper implements ResourceModelMapperInterface
 {
     public function toDomain(object $resourceModel): object
     {
-        $resourceModel instanceof SettingResource
-            || throw new \InvalidArgumentException('Unexpected resource model.');
+        $resourceModel instanceof SettingResource || throw new \InvalidArgumentException('Unexpected resource model.');
 
-        return clone $resourceModel;
+        return new Setting(
+            id: $resourceModel->id,
+            tenantId: $resourceModel->tenant_id,
+            userId: $resourceModel->user_id,
+            moduleKey: $resourceModel->module_key,
+            settingKey: $resourceModel->setting_key,
+            value: $resourceModel->value,
+            createdAt: $resourceModel->created_at,
+            updatedAt: $resourceModel->updated_at,
+        );
     }
 
     public function toSourceModel(object $domainModel): object
     {
-        $domainModel instanceof SettingResource
-            || throw new \InvalidArgumentException('Unexpected domain model.');
+        $domainModel instanceof Setting || throw new \InvalidArgumentException('Unexpected domain model.');
 
-        return clone $domainModel;
+        $now = new \DateTimeImmutable();
+
+        return new SettingResource(
+            id: $domainModel->getId(),
+            tenant_id: $domainModel->getTenantId(),
+            user_id: $domainModel->getUserId(),
+            module_key: $domainModel->getModuleKey(),
+            setting_key: $domainModel->getSettingKey(),
+            value: $domainModel->getValue(),
+            created_at: $domainModel->getCreatedAt() ?? $now,
+            updated_at: $domainModel->getUpdatedAt() ?? $now,
+        );
     }
 }

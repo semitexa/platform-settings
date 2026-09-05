@@ -13,6 +13,7 @@ use Semitexa\Orm\OrmManager;
 use Semitexa\Orm\Query\Operator;
 use Semitexa\Orm\Repository\DomainRepository;
 use Semitexa\Platform\Settings\Application\Db\MySQL\Model\SettingResource;
+use Semitexa\Platform\Settings\Domain\Model\Setting;
 use Semitexa\Platform\Settings\Domain\Contract\SettingsStoreInterface;
 
 /**
@@ -191,11 +192,11 @@ final class SettingsStore implements SettingsStoreInterface
         $this->validateKey($key);
 
         $resource = $this->findResource($moduleKey, $key, $userId);
-        if ($resource === null || $resource->value === '') {
+        if ($resource === null || $resource->isBlank()) {
             return null;
         }
 
-        return json_decode($resource->value, true, 512, \JSON_THROW_ON_ERROR);
+        return json_decode($resource->getValue(), true, 512, \JSON_THROW_ON_ERROR);
     }
 
     /**
@@ -305,14 +306,14 @@ final class SettingsStore implements SettingsStoreInterface
             ->where(SettingResource::column('module_key'), Operator::Equals, $moduleKey);
         $this->applyUserScope($query, $userId);
 
-        /** @var list<SettingResource> $rows */
-        $rows = $query->fetchAllAs(SettingResource::class, $this->orm()->getMapperRegistry());
+        /** @var list<Setting> $rows */
+        $rows = $query->fetchAllAs(Setting::class, $this->orm()->getMapperRegistry());
 
         $out = [];
         foreach ($rows as $row) {
-            $out[$row->setting_key] = $row->value === ''
+            $out[$row->getSettingKey()] = $row->isBlank()
                 ? null
-                : json_decode($row->value, true, 512, \JSON_THROW_ON_ERROR);
+                : json_decode($row->getValue(), true, 512, \JSON_THROW_ON_ERROR);
         }
 
         return $out;
@@ -348,10 +349,10 @@ final class SettingsStore implements SettingsStoreInterface
         string $key,
         ?string $userId,
         bool $useCache = true,
-    ): ?SettingResource {
+    ): ?Setting {
         $cacheKey = $this->readCacheKey($moduleKey, $key, $userId);
         if ($useCache) {
-            /** @var array<string, SettingResource|null> $cache */
+            /** @var array<string, Setting|null> $cache */
             $cache = CoroutineLocal::get(self::CACHE_KEY, []);
             if (array_key_exists($cacheKey, $cache)) {
                 return $cache[$cacheKey];
@@ -363,8 +364,8 @@ final class SettingsStore implements SettingsStoreInterface
             ->where(SettingResource::column('setting_key'), Operator::Equals, $key);
         $this->applyUserScope($query, $userId);
 
-        /** @var SettingResource|null $resource */
-        $resource = $query->fetchOneAs(SettingResource::class, $this->orm()->getMapperRegistry());
+        /** @var Setting|null $resource */
+        $resource = $query->fetchOneAs(Setting::class, $this->orm()->getMapperRegistry());
 
         // Populated even when the caller asked to bypass: a fresh read is still the truth,
         // and leaving the stale entry behind would serve it to the next reader.
@@ -393,9 +394,9 @@ final class SettingsStore implements SettingsStoreInterface
         return $this->currentTenantId() . "\0" . $scope . "\0" . $moduleKey . "\0" . $key;
     }
 
-    private function rememberRead(string $cacheKey, ?SettingResource $resource): void
+    private function rememberRead(string $cacheKey, ?Setting $resource): void
     {
-        /** @var array<string, SettingResource|null> $cache */
+        /** @var array<string, Setting|null> $cache */
         $cache = CoroutineLocal::get(self::CACHE_KEY, []);
         $cache[$cacheKey] = $resource;
         CoroutineLocal::set(self::CACHE_KEY, $cache);
@@ -404,7 +405,7 @@ final class SettingsStore implements SettingsStoreInterface
     /** Drop one scope after a write, so the next read in this request sees what it wrote. */
     private function forgetRead(string $moduleKey, string $key, ?string $userId): void
     {
-        /** @var array<string, SettingResource|null> $cache */
+        /** @var array<string, Setting|null> $cache */
         $cache = CoroutineLocal::get(self::CACHE_KEY, []);
         unset($cache[$this->readCacheKey($moduleKey, $key, $userId)]);
         CoroutineLocal::set(self::CACHE_KEY, $cache);
@@ -440,7 +441,7 @@ final class SettingsStore implements SettingsStoreInterface
 
     private function repository(): DomainRepository
     {
-        return $this->repository ??= $this->orm()->repository(SettingResource::class, SettingResource::class);
+        return $this->repository ??= $this->orm()->repository(SettingResource::class, Setting::class);
     }
 
     private function orm(): OrmManager
