@@ -114,6 +114,112 @@ final class SettingsQueryBudgetTest extends TestCase
         self::assertCount(1, $reads, 'a cached absence still has to be cached');
     }
 
+    /**
+     * Seven distinct keys, one module, one query.
+     *
+     * MEASURED on GET / after the per-request cache landed: seven
+     * platform_settings SELECTs remained, one per service — OsPreferences,
+     * SkinStore, OsSessionStore, Weaver, OsGraph, InputLayoutStore and
+     * OpenDialogStore. Not duplicates, so the read cache could not collapse
+     * them; but all seven declare MODULE = 'os', so one module load answers
+     * every one of them.
+     */
+    #[Test]
+    public function seven_keys_of_one_module_cost_one_query(): void
+    {
+        $keys = ['assistant_name', 'skin', 'session', 'weave_cursor', 'self_id', 'layouts', 'dialogs'];
+        foreach ($keys as $i => $key) {
+            $this->store->set('os', $key, 'v' . $i);
+        }
+
+        $reads = $this->reads(function () use ($keys): void {
+            foreach ($keys as $i => $key) {
+                self::assertSame('v' . $i, $this->store->get('os', $key));
+            }
+        });
+
+        self::assertCount(
+            1,
+            $reads,
+            "Seven keys of one module must cost one module load, not one query each. Statements run:\n  - "
+            . implode("\n  - ", $reads),
+        );
+    }
+
+    /**
+     * The warm must not answer for a module it never loaded. Two modules are
+     * two loads — the shortcut is per module and scope, not global.
+     */
+    #[Test]
+    public function a_second_module_is_a_second_query(): void
+    {
+        $this->store->set('os', 'a', 1);
+        $this->store->set('cms', 'b', 2);
+
+        $reads = $this->reads(function (): void {
+            self::assertSame(1, $this->store->get('os', 'a'));
+            self::assertSame(2, $this->store->get('cms', 'b'));
+            self::assertSame(1, $this->store->get('os', 'a'));
+        });
+
+        self::assertCount(2, $reads, 'one load per module touched, and no more');
+    }
+
+    /**
+     * An absent key in a module already loaded must be answered from the load,
+     * not re-queried — and must not be reported as present.
+     */
+    #[Test]
+    public function an_absent_key_in_a_warmed_module_costs_nothing(): void
+    {
+        $this->store->set('os', 'present', 'yes');
+
+        $reads = $this->reads(function (): void {
+            self::assertSame('yes', $this->store->get('os', 'present'));
+            for ($i = 0; $i < 5; ++$i) {
+                self::assertNull($this->store->get('os', 'absent'));
+                self::assertFalse($this->store->has('os', 'absent'));
+            }
+        });
+
+        self::assertCount(1, $reads, 'an absence inside a loaded module is already known');
+    }
+
+    /**
+     * The failure a module-wide warm invites, and the reason it must forget the
+     * whole module on a write: a key written after the warm is NOT in the loaded
+     * set, so a shortcut that trusted the warm would report it absent forever.
+     */
+    #[Test]
+    public function a_key_written_after_the_warm_is_visible_immediately(): void
+    {
+        $this->store->set('os', 'first', 'one');
+        self::assertSame('one', $this->store->get('os', 'first'));
+        self::assertNull($this->store->get('os', 'second'));
+
+        $this->store->set('os', 'second', 'two');
+
+        self::assertSame('two', $this->store->get('os', 'second'), 'the warm outlived the write');
+        self::assertTrue($this->store->has('os', 'second'));
+        self::assertSame('one', $this->store->get('os', 'first'));
+    }
+
+    /**
+     * A warm is per scope. The global scope holds different rows from a user's,
+     * so a module warmed globally must never answer a user-scoped read.
+     */
+    #[Test]
+    public function a_warm_never_crosses_the_user_scope(): void
+    {
+        $this->store->set('os', 'greeting', 'global');
+        $this->store->setForUser('os', 'greeting', 'personal', 'user-1');
+
+        self::assertSame('global', $this->store->get('os', 'greeting'));
+        self::assertSame('personal', $this->store->getForUser('os', 'greeting', 'user-1'));
+        self::assertNull($this->store->getForUser('os', 'absent', 'user-1'));
+        self::assertSame('global', $this->store->get('os', 'greeting'));
+    }
+
     #[Test]
     public function a_write_is_visible_to_the_next_read_in_the_same_request(): void
     {

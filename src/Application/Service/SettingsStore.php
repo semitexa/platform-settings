@@ -37,24 +37,17 @@ final class SettingsStore implements SettingsStoreInterface
     private const KEY_MAX = 255;
 
     /**
-     * Where the per-request read cache lives.
+     * What this request has already read. A separate object: cache identity, the
+     * stored rows and the module warm marker are one concern, and this class was
+     * already a recorded structural outlier before the warm was added to it.
      *
-     * MEASURED before this existed: one GET / (OsShellPayload) issued 18 queries and 17 of
-     * them were this table, the same statement each time — 94% of the request's database
-     * work spent re-answering questions it had already answered. At ~0.2 ms a round trip
-     * no slow-query threshold can ever see it; the cost is the count, not the duration.
-     *
-     * In {@see CoroutineLocal} and NOT an instance property, which would be the obvious
-     * place and would be a data leak: this store is a shared `#[AsService]` singleton and
-     * these rows are tenant-scoped, so an instance cache would serve one tenant's settings
-     * to the next request on the same worker. Same reasoning, and the same shape, as
-     * {@see \Semitexa\Rbac\Application\Service\RbacDecisionCache}.
-     *
-     * Scope is one request by construction, so a value written by another process mid-request
-     * is not picked up until the next one. That is what per-request caching means, and it is
-     * the same staleness window the request already had between its own first and last read.
+     * Built lazily, NOT in a constructor. The container does not run constructors
+     * when it builds an #[AsService] class — it instantiates and then injects —
+     * so a readonly property assigned in __construct() is left uninitialised on
+     * the only path that matters. Every unit test passed because `new
+     * SettingsStore()` does run it; the OS shell and the CMS editor answered 500.
      */
-    private const CACHE_KEY = 'platform_settings.request_reads';
+    private ?SettingsReadCache $reads = null;
 
     // An absent row is cached as a plain null; presence is decided by array_key_exists, so
     // no sentinel is needed. An earlier version used one and widened the cache's value type
@@ -303,12 +296,9 @@ final class SettingsStore implements SettingsStoreInterface
     {
         $this->validateModuleKey($moduleKey);
 
-        $query = $this->scoped()->query()
-            ->where(SettingResource::column('module_key'), Operator::Equals, $moduleKey);
-        $this->applyUserScope($query, $userId);
-
-        /** @var list<Setting> $rows */
-        $rows = $query->fetchAllAs(Setting::class, $this->mapperRegistry());
+        // The same statement the warm runs, so it populates the same cache: a
+        // getAll() followed by a get() of one of its keys costs one query, not two.
+        $rows = $this->loadModule($moduleKey, $userId);
 
         $out = [];
         foreach ($rows as $row) {
@@ -351,13 +341,28 @@ final class SettingsStore implements SettingsStoreInterface
         ?string $userId,
         bool $useCache = true,
     ): ?Setting {
-        $cacheKey = $this->readCacheKey($moduleKey, $key, $userId);
+        $tenantId = $this->currentTenantId();
+
         if ($useCache) {
-            /** @var array<string, Setting|null> $cache */
-            $cache = CoroutineLocal::get(self::CACHE_KEY, []);
-            if (array_key_exists($cacheKey, $cache)) {
-                return $cache[$cacheKey];
+            if ($this->reads()->knows($tenantId, $moduleKey, $key, $userId)) {
+                return $this->reads()->read($tenantId, $moduleKey, $key, $userId);
             }
+
+            // The module is already loaded and this key was not among its rows,
+            // so the absence is established. Without the warm marker that is
+            // indistinguishable from "never looked" and costs a query per miss.
+            if ($this->reads()->isWarm($tenantId, $moduleKey, $userId)) {
+                return null;
+            }
+
+            // First touch of this module: load ALL of it in one statement rather
+            // than this row alone. Seven OS services read seven DIFFERENT keys of
+            // module 'os' on one page, which no row cache can collapse; settings
+            // are a small per-module set by nature, and getAll() already loads
+            // exactly this much for callers who ask for it.
+            $this->reads()->rememberModule($tenantId, $moduleKey, $userId, $this->loadModule($moduleKey, $userId));
+
+            return $this->reads()->read($tenantId, $moduleKey, $key, $userId);
         }
 
         $query = $this->scoped()->query()
@@ -368,48 +373,30 @@ final class SettingsStore implements SettingsStoreInterface
         /** @var Setting|null $resource */
         $resource = $query->fetchOneAs(Setting::class, $this->mapperRegistry());
 
-        // Populated even when the caller asked to bypass: a fresh read is still the truth,
-        // and leaving the stale entry behind would serve it to the next reader.
-        $this->rememberRead($cacheKey, $resource);
+        // Populated even when the caller asked to bypass: a fresh read is still the
+        // truth, and leaving the stale entry behind would serve it to the next reader.
+        $this->reads()->remember($tenantId, $moduleKey, $key, $userId, $resource);
 
         return $resource;
-    }
-
-    /**
-     * Cache identity. The tenant belongs in the key even though the store is already
-     * tenant-scoped at the query level: tenant fan-out walks several tenants inside one
-     * coroutine, so a key without it would hand tenant B the row it read for tenant A.
-     */
-    private function readCacheKey(string $moduleKey, string $key, ?string $userId): string
-    {
-        // currentTenantId() is documented as never null - it returns the 'default'
-        // sentinel instead - so coalescing here would imply a nullability the method
-        // deliberately does not have. Only $userId is genuinely optional.
-        //
-        // The user scope is TAGGED rather than defaulted: a bare sentinel collides with a
-        // real user whose id happens to equal it, and the two scopes hold different rows,
-        // so the collision would serve a personal setting as the global one. 'g' can never
-        // collide with 'u:' + anything.
-        $scope = $userId === null ? 'g' : 'u:' . $userId;
-
-        return $this->currentTenantId() . "\0" . $scope . "\0" . $moduleKey . "\0" . $key;
-    }
-
-    private function rememberRead(string $cacheKey, ?Setting $resource): void
-    {
-        /** @var array<string, Setting|null> $cache */
-        $cache = CoroutineLocal::get(self::CACHE_KEY, []);
-        $cache[$cacheKey] = $resource;
-        CoroutineLocal::set(self::CACHE_KEY, $cache);
     }
 
     /** Drop one scope after a write, so the next read in this request sees what it wrote. */
     private function forgetRead(string $moduleKey, string $key, ?string $userId): void
     {
-        /** @var array<string, Setting|null> $cache */
-        $cache = CoroutineLocal::get(self::CACHE_KEY, []);
-        unset($cache[$this->readCacheKey($moduleKey, $key, $userId)]);
-        CoroutineLocal::set(self::CACHE_KEY, $cache);
+        $this->reads()->forget($this->currentTenantId(), $moduleKey, $key, $userId);
+    }
+
+    /** @return list<Setting> every row of one module and scope, in one statement */
+    private function loadModule(string $moduleKey, ?string $userId): array
+    {
+        $query = $this->scoped()->query()
+            ->where(SettingResource::column('module_key'), Operator::Equals, $moduleKey);
+        $this->applyUserScope($query, $userId);
+
+        /** @var list<Setting> $rows */
+        $rows = $query->fetchAllAs(Setting::class, $this->mapperRegistry());
+
+        return $rows;
     }
 
     private function applyUserScope(object $query, ?string $userId): void
@@ -465,4 +452,9 @@ final class SettingsStore implements SettingsStoreInterface
             throw new \InvalidArgumentException('key must be 1-' . self::KEY_MAX . ' characters');
         }
     }
+    private function reads(): SettingsReadCache
+    {
+        return $this->reads ??= new SettingsReadCache();
+    }
+
 }
