@@ -9,6 +9,7 @@ use Semitexa\Core\Attribute\SatisfiesServiceContract;
 use Semitexa\Core\Support\CoroutineLocal;
 use Semitexa\Core\Tenant\TenantContextAccess;
 use Semitexa\Core\Tenant\TenantContextStoreInterface;
+use Semitexa\Orm\Application\Service\OrmBackedStore;
 use Semitexa\Orm\OrmManager;
 use Semitexa\Orm\Query\Operator;
 use Semitexa\Orm\Repository\DomainRepository;
@@ -30,6 +31,8 @@ use Semitexa\Platform\Settings\Domain\Contract\SettingsStoreInterface;
 #[SatisfiesServiceContract(of: SettingsStoreInterface::class)]
 final class SettingsStore implements SettingsStoreInterface
 {
+    use OrmBackedStore;
+
     private const MODULE_KEY_MAX = 128;
     private const KEY_MAX = 255;
 
@@ -68,8 +71,6 @@ final class SettingsStore implements SettingsStoreInterface
      */
     #[InjectAsReadonly]
     protected TenantContextStoreInterface $tenantContextStore;
-
-    private ?DomainRepository $repository = null;
 
     /** Test seam — production path uses property injection. */
     public function withTenantContextStore(TenantContextStoreInterface $store): self
@@ -307,7 +308,7 @@ final class SettingsStore implements SettingsStoreInterface
         $this->applyUserScope($query, $userId);
 
         /** @var list<Setting> $rows */
-        $rows = $query->fetchAllAs(Setting::class, $this->orm()->getMapperRegistry());
+        $rows = $query->fetchAllAs(Setting::class, $this->mapperRegistry());
 
         $out = [];
         foreach ($rows as $row) {
@@ -365,7 +366,7 @@ final class SettingsStore implements SettingsStoreInterface
         $this->applyUserScope($query, $userId);
 
         /** @var Setting|null $resource */
-        $resource = $query->fetchOneAs(Setting::class, $this->orm()->getMapperRegistry());
+        $resource = $query->fetchOneAs(Setting::class, $this->mapperRegistry());
 
         // Populated even when the caller asked to bypass: a fresh read is still the truth,
         // and leaving the stale entry behind would serve it to the next reader.
@@ -441,12 +442,7 @@ final class SettingsStore implements SettingsStoreInterface
 
     private function repository(): DomainRepository
     {
-        return $this->repository ??= $this->orm()->repository(SettingResource::class, Setting::class);
-    }
-
-    private function orm(): OrmManager
-    {
-        return $this->orm ??= new OrmManager();
+        return $this->domainRepository(SettingResource::class, Setting::class);
     }
 
     private function requireUserId(string $userId): void
