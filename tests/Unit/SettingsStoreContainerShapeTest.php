@@ -25,6 +25,14 @@ use Semitexa\Platform\Settings\Application\Service\SettingsStore;
  * the OS shell and the CMS editor both answered 500. This test closes the gap
  * so the next one costs a PHPUnit run instead of an E2E run.
  */
+/**
+ * Deliberately hand-rolls newInstanceWithoutConstructor().
+ *
+ * Everywhere else in the repository that pattern moved to
+ * {@see \Semitexa\Testing\Traits\BuildsContainerManagedObjects}. Not here: the
+ * constructor bypass is the SUBJECT of these tests, not a means of setting them
+ * up, and building through the helper would hide the mechanism being asserted.
+ */
 final class SettingsStoreContainerShapeTest extends TestCase
 {
     protected function setUp(): void
