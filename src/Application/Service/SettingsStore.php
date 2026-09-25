@@ -48,6 +48,9 @@ final class SettingsStore implements SettingsStoreInterface
      */
     private ?SettingsReadCache $reads = null;
 
+    /** Worker-local getAll() snapshots of the global scope; lazily built for the same reason. */
+    private ?SettingsModuleSnapshots $snapshots = null;
+
     // An absent row is cached as a plain null; presence is decided by array_key_exists, so
     // no sentinel is needed. An earlier version used one and widened the cache's value type
     // to SettingResource|string, which PHPStan correctly flagged: nothing then guaranteed
@@ -295,18 +298,22 @@ final class SettingsStore implements SettingsStoreInterface
     {
         $this->validateModuleKey($moduleKey);
 
-        // The same statement the warm runs, so it populates the same cache: a
-        // getAll() followed by a get() of one of its keys costs one query, not two.
-        $rows = $this->loadModule($moduleKey, $userId);
+        $load = function () use ($moduleKey, $userId): array {
+            $out = [];
+            foreach ($this->loadModule($moduleKey, $userId) as $row) {
+                $out[$row->getSettingKey()] = $row->isBlank()
+                    ? null
+                    : json_decode($row->getValue(), true, 512, \JSON_THROW_ON_ERROR);
+            }
 
-        $out = [];
-        foreach ($rows as $row) {
-            $out[$row->getSettingKey()] = $row->isBlank()
-                ? null
-                : json_decode($row->getValue(), true, 512, \JSON_THROW_ON_ERROR);
-        }
+            return $out;
+        };
 
-        return $out;
+        // Global scope: a worker-local snapshot with a short TTL — see SettingsModuleSnapshots
+        // for why, and for what a write elsewhere costs in staleness.
+        return $userId === null
+            ? ($this->snapshots ??= new SettingsModuleSnapshots())->get($this->currentTenantId(), $moduleKey, $load)
+            : $load();
     }
 
     private function removeByScope(string $moduleKey, string $key, ?string $userId): void
@@ -383,6 +390,7 @@ final class SettingsStore implements SettingsStoreInterface
     private function forgetRead(string $moduleKey, string $key, ?string $userId): void
     {
         $this->reads()->forget($this->currentTenantId(), $moduleKey, $key, $userId);
+        $this->snapshots?->forget($this->currentTenantId(), $moduleKey);
     }
 
     /** @return list<Setting> every row of one module and scope, in one statement */
