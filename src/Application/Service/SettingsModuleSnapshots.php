@@ -24,10 +24,13 @@ namespace Semitexa\Platform\Settings\Application\Service;
  *    {@see TTL_SECONDS}. That bounded staleness is the price, and it is why
  *    only getAll() of the GLOBAL scope is cached here: per-user settings and
  *    single-key get() keep their per-request semantics ({@see SettingsReadCache});
- *  - a failed load is remembered for {@see FAILURE_TTL_SECONDS} and rethrown,
+ *  - a failed load is remembered for {@see FAILURE_TTL_SECONDS} and reported,
  *    so a database outage costs one connect attempt per module per worker per
  *    window instead of one per request. Callers already treat a throwing
- *    store as "use the defaults".
+ *    store as "use the defaults". Only the failure's description is kept, not
+ *    the Throwable: rethrowing that one instance would log the first request's
+ *    stack trace for every later request, and hold whatever its frames
+ *    referenced for the whole window.
  *
  * Keyed by tenant: the store is a worker singleton serving every tenant.
  * Coroutine-safe: a load that yields (database I/O) and races a forget() is
@@ -42,7 +45,7 @@ final class SettingsModuleSnapshots
     /** Bound on distinct tenant/module entries; beyond it the map starts over. */
     private const MAX_ENTRIES = 1024;
 
-    /** @var array<string, array{expires: float, value: array<string, mixed>|\Throwable}> */
+    /** @var array<string, array{expires: float, value: array<string, mixed>|string}> string = failure description */
     private array $entries = [];
 
     /** @var array<string, int> bumped by forget(), so an in-flight load cannot store stale rows */
@@ -68,8 +71,8 @@ final class SettingsModuleSnapshots
 
         $entry = $this->entries[$key] ?? null;
         if ($entry !== null && $entry['expires'] > $now) {
-            if ($entry['value'] instanceof \Throwable) {
-                throw $entry['value'];
+            if (is_string($entry['value'])) {
+                throw new \RuntimeException($entry['value']);
             }
 
             return $entry['value'];
@@ -79,7 +82,13 @@ final class SettingsModuleSnapshots
         try {
             $value = $load();
         } catch (\Throwable $e) {
-            $this->store($key, $generation, ($this->clock)() + self::FAILURE_TTL_SECONDS, $e);
+            $this->store($key, $generation, ($this->clock)() + self::FAILURE_TTL_SECONDS, sprintf(
+                'Settings module "%s" is unavailable: its load failed less than %.0fs ago (%s: %s)',
+                $moduleKey,
+                self::FAILURE_TTL_SECONDS,
+                $e::class,
+                $e->getMessage(),
+            ));
             throw $e;
         }
         $this->store($key, $generation, ($this->clock)() + self::TTL_SECONDS, $value);
@@ -95,8 +104,8 @@ final class SettingsModuleSnapshots
         $this->generations[$key] = ($this->generations[$key] ?? 0) + 1;
     }
 
-    /** @param array<string, mixed>|\Throwable $value */
-    private function store(string $key, int $generation, float $expires, array|\Throwable $value): void
+    /** @param array<string, mixed>|string $value */
+    private function store(string $key, int $generation, float $expires, array|string $value): void
     {
         if (($this->generations[$key] ?? 0) !== $generation) {
             return;

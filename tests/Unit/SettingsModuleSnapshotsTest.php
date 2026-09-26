@@ -82,12 +82,20 @@ final class SettingsModuleSnapshotsTest extends TestCase
             throw new \PDOException('SQLSTATE[HY000] [2002] Connection refused');
         };
 
+        $first = null;
         for ($i = 0; $i < 3; ++$i) {
             try {
                 $snapshots->get('acme', 'locale', $failing);
                 self::fail('expected the load failure to surface');
-            } catch (\PDOException $e) {
+            } catch (\Throwable $e) {
                 self::assertStringContainsString('Connection refused', $e->getMessage());
+                if ($first === null) {
+                    self::assertInstanceOf(\PDOException::class, $e, 'the live failure surfaces as itself');
+                    $first = $e;
+                } else {
+                    self::assertNotSame($first, $e, 'a remembered failure is a fresh exception, not the first request\'s instance');
+                    self::assertStringContainsString('PDOException', $e->getMessage());
+                }
             }
         }
         self::assertSame(1, $attempts, 'an outage costs one connect attempt per window, not one per request');
