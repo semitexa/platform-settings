@@ -33,8 +33,16 @@ namespace Semitexa\Platform\Settings\Application\Service;
  *    referenced for the whole window.
  *
  * Keyed by tenant: the store is a worker singleton serving every tenant.
- * Coroutine-safe: a load that yields (database I/O) and races a forget() is
- * not stored — the generation check keeps it from resurrecting the old rows.
+ *
+ * Coroutine-safe, per key:
+ *  - one load at a time. Coroutines that miss a key while its load is in
+ *    flight wait for it and then read what it stored, so an outage costs ONE
+ *    failed connect per window, not one per concurrent request, and a later
+ *    failed load cannot overwrite an earlier good one;
+ *  - a load that yields (database I/O) and races a forget() is not stored:
+ *    forget() detaches the in-flight load, so it cannot resurrect old rows.
+ * Bookkeeping lives only as long as a load is in flight, so nothing but the
+ * bounded snapshot map outlives a request.
  */
 final class SettingsModuleSnapshots
 {
@@ -42,14 +50,24 @@ final class SettingsModuleSnapshots
 
     public const FAILURE_TTL_SECONDS = 5.0;
 
+    /** A waiter gives up on a stuck load after this long and loads on its own. */
+    public const WAIT_TIMEOUT_SECONDS = 10.0;
+
     /** Bound on distinct tenant/module entries; beyond it the map starts over. */
     private const MAX_ENTRIES = 1024;
 
     /** @var array<string, array{expires: float, value: array<string, mixed>|string}> string = failure description */
     private array $entries = [];
 
-    /** @var array<string, int> bumped by forget(), so an in-flight load cannot store stale rows */
-    private array $generations = [];
+    /**
+     * Loads in flight, keyed like $entries. forget() removes a key's load, which
+     * is how that load learns it must not store; the entry is gone once it lands.
+     *
+     * @var array<string, array{token: int, gate: \Swoole\Coroutine\Channel|null}>
+     */
+    private array $loads = [];
+
+    private int $nextToken = 0;
 
     /** @var \Closure(): float monotonic seconds */
     private \Closure $clock;
@@ -67,22 +85,41 @@ final class SettingsModuleSnapshots
     public function get(string $tenantId, string $moduleKey, \Closure $load): array
     {
         $key = $tenantId . "\0" . $moduleKey;
-        $now = ($this->clock)();
 
-        $entry = $this->entries[$key] ?? null;
-        if ($entry !== null && $entry['expires'] > $now) {
-            if (is_string($entry['value'])) {
-                throw new \RuntimeException($entry['value']);
+        while (true) {
+            $entry = $this->entries[$key] ?? null;
+            if ($entry !== null && $entry['expires'] > ($this->clock)()) {
+                if (is_string($entry['value'])) {
+                    throw new \RuntimeException($entry['value']);
+                }
+
+                return $entry['value'];
             }
 
-            return $entry['value'];
+            $inFlight = $this->loads[$key] ?? null;
+            if ($inFlight === null || $inFlight['gate'] === null) {
+                break;
+            }
+
+            // Another coroutine is loading this key: wait for it to land, then
+            // re-read. Closed gate = landed (stored, or detached by a forget, in
+            // which case this coroutine becomes the next loader).
+            $inFlight['gate']->pop(self::WAIT_TIMEOUT_SECONDS);
+            if (($this->loads[$key]['token'] ?? null) === $inFlight['token']) {
+                // Still the same load after the timeout: stuck. Do not queue
+                // behind it forever, and do not disturb it either.
+                return $load();
+            }
         }
 
-        $generation = $this->generations[$key] ?? 0;
+        $token = ++$this->nextToken;
+        $gate = self::inCoroutine() ? new \Swoole\Coroutine\Channel(1) : null;
+        $this->loads[$key] = ['token' => $token, 'gate' => $gate];
+
         try {
             $value = $load();
         } catch (\Throwable $e) {
-            $this->store($key, $generation, ($this->clock)() + self::FAILURE_TTL_SECONDS, sprintf(
+            $this->land($key, $token, $gate, ($this->clock)() + self::FAILURE_TTL_SECONDS, sprintf(
                 'Settings module "%s" is unavailable: its load failed less than %.0fs ago (%s: %s)',
                 $moduleKey,
                 self::FAILURE_TTL_SECONDS,
@@ -91,7 +128,7 @@ final class SettingsModuleSnapshots
             ));
             throw $e;
         }
-        $this->store($key, $generation, ($this->clock)() + self::TTL_SECONDS, $value);
+        $this->land($key, $token, $gate, ($this->clock)() + self::TTL_SECONDS, $value);
 
         return $value;
     }
@@ -100,16 +137,29 @@ final class SettingsModuleSnapshots
     public function forget(string $tenantId, string $moduleKey): void
     {
         $key = $tenantId . "\0" . $moduleKey;
-        unset($this->entries[$key]);
-        $this->generations[$key] = ($this->generations[$key] ?? 0) + 1;
+        unset($this->entries[$key], $this->loads[$key]);
     }
 
     /** @param array<string, mixed>|string $value */
-    private function store(string $key, int $generation, float $expires, array|string $value): void
+    private function land(string $key, int $token, ?\Swoole\Coroutine\Channel $gate, float $expires, array|string $value): void
     {
-        if (($this->generations[$key] ?? 0) !== $generation) {
-            return;
+        // Detached by a forget() while loading (or superseded after one): what
+        // this load read predates the write, so it must not become the snapshot.
+        if (($this->loads[$key]['token'] ?? null) === $token) {
+            unset($this->loads[$key]);
+            $this->store($key, $expires, $value);
         }
+        $gate?->close();
+    }
+
+    private static function inCoroutine(): bool
+    {
+        return class_exists(\Swoole\Coroutine::class, false) && \Swoole\Coroutine::getCid() > 0;
+    }
+
+    /** @param array<string, mixed>|string $value */
+    private function store(string $key, float $expires, array|string $value): void
+    {
         if (count($this->entries) >= self::MAX_ENTRIES && !isset($this->entries[$key])) {
             $this->entries = [];
         }

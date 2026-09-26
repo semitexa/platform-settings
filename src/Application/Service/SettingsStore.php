@@ -390,7 +390,10 @@ final class SettingsStore implements SettingsStoreInterface
     private function forgetRead(string $moduleKey, string $key, ?string $userId): void
     {
         $this->reads()->forget($this->currentTenantId(), $moduleKey, $key, $userId);
-        $this->snapshots?->forget($this->currentTenantId(), $moduleKey);
+        // Snapshots hold the global scope only; a per-user write leaves them valid.
+        if ($userId === null) {
+            $this->snapshots?->forget($this->currentTenantId(), $moduleKey);
+        }
     }
 
     /** @return list<Setting> every row of one module and scope, in one statement */

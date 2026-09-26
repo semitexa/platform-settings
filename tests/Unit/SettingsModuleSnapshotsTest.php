@@ -103,4 +103,76 @@ final class SettingsModuleSnapshotsTest extends TestCase
         $this->now += SettingsModuleSnapshots::FAILURE_TTL_SECONDS + 0.01;
         self::assertSame(['default' => 'uk'], $snapshots->get('acme', 'locale', static fn (): array => ['default' => 'uk']));
     }
+
+    #[Test]
+    public function concurrent_misses_share_one_load_and_its_failure(): void
+    {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
+        $snapshots = $this->snapshots();
+        $attempts = 0;
+        $failures = [];
+
+        \Swoole\Coroutine\run(function () use ($snapshots, &$attempts, &$failures): void {
+            $wg = new \Swoole\Coroutine\WaitGroup();
+            for ($i = 0; $i < 5; ++$i) {
+                $wg->add();
+                \Swoole\Coroutine::create(function () use ($snapshots, &$attempts, &$failures, $wg): void {
+                    try {
+                        $snapshots->get('acme', 'locale', function () use (&$attempts): array {
+                            ++$attempts;
+                            \Swoole\Coroutine::sleep(0.05); // the connect attempt yields
+                            throw new \PDOException('SQLSTATE[HY000] [2002] Connection refused');
+                        });
+                    } catch (\Throwable $e) {
+                        $failures[] = $e->getMessage();
+                    } finally {
+                        $wg->done();
+                    }
+                });
+            }
+            $wg->wait();
+        });
+
+        self::assertSame(1, $attempts, 'concurrent misses wait for the one in-flight load');
+        self::assertCount(5, $failures);
+        foreach ($failures as $message) {
+            self::assertStringContainsString('Connection refused', $message);
+        }
+    }
+
+    #[Test]
+    public function a_waiter_reloads_when_the_load_it_waited_for_raced_a_forget(): void
+    {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
+        $snapshots = $this->snapshots();
+        $seen = [];
+
+        \Swoole\Coroutine\run(function () use ($snapshots, &$seen): void {
+            $wg = new \Swoole\Coroutine\WaitGroup(2);
+            \Swoole\Coroutine::create(function () use ($snapshots, &$seen, $wg): void {
+                $seen['leader'] = $snapshots->get('acme', 'locale', static function () use ($snapshots): array {
+                    \Swoole\Coroutine::sleep(0.05);
+                    $snapshots->forget('acme', 'locale'); // a write lands mid-load
+
+                    return ['default' => 'old'];
+                });
+                $wg->done();
+            });
+            \Swoole\Coroutine::create(function () use ($snapshots, &$seen, $wg): void {
+                $seen['waiter'] = $snapshots->get('acme', 'locale', static fn (): array => ['default' => 'new']);
+                $wg->done();
+            });
+            $wg->wait();
+        });
+
+        self::assertSame(['default' => 'old'], $seen['leader']);
+        self::assertSame(['default' => 'new'], $seen['waiter'], 'the detached load is not handed to waiters');
+        self::assertSame(['default' => 'new'], $snapshots->get('acme', 'locale', static fn (): array => ['default' => 'x']));
+    }
 }
