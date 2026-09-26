@@ -14,6 +14,7 @@ use Semitexa\Core\Tenant\TenantContextStoreInterface;
 use Semitexa\Orm\Adapter\QueryRecorder;
 use Semitexa\Orm\Domain\Model\ConnectionConfig;
 use Semitexa\Orm\OrmManager;
+use Semitexa\Platform\Settings\Application\Service\SettingsModuleSnapshots;
 use Semitexa\Platform\Settings\Application\Service\SettingsStore;
 
 /**
@@ -348,6 +349,73 @@ final class SettingsQueryBudgetTest extends TestCase
         )->fetchAll();
 
         return (int) ($rows[0]['c'] ?? -1);
+    }
+
+    #[Test]
+    public function get_all_of_a_global_module_is_one_query_across_requests_within_the_ttl(): void
+    {
+        $this->store->set('locale', 'default', 'uk');
+        $now = $this->freezeSnapshotClock();
+
+        $reads = $this->reads(function (): void {
+            for ($request = 0; $request < 5; ++$request) {
+                CoroutineLocal::resetCliStore(); // a new request on the same worker
+                self::assertSame(['default' => 'uk'], $this->store->getAll('locale'));
+            }
+        });
+        self::assertCount(1, $reads);
+
+        // Another process writes: seen once the snapshot expires, not before.
+        $this->writeBehindTheStoresBack('locale', 'default', 'de');
+        self::assertSame(['default' => 'uk'], $this->store->getAll('locale'));
+        $now->value += SettingsModuleSnapshots::TTL_SECONDS + 0.01;
+        self::assertSame(['default' => 'de'], $this->store->getAll('locale'));
+    }
+
+    #[Test]
+    public function a_write_through_the_store_is_visible_to_get_all_at_once(): void
+    {
+        $this->freezeSnapshotClock();
+        $this->store->set('locale', 'default', 'uk');
+        self::assertSame(['default' => 'uk'], $this->store->getAll('locale'));
+
+        $this->store->set('locale', 'default', 'de');
+        self::assertSame(['default' => 'de'], $this->store->getAll('locale'));
+
+        $this->store->remove('locale', 'default');
+        self::assertSame([], $this->store->getAll('locale'));
+    }
+
+    #[Test]
+    public function get_all_snapshots_never_cross_a_tenant_or_reach_the_user_scope(): void
+    {
+        $this->freezeSnapshotClock();
+        $this->store->set('locale', 'default', 'uk');
+        self::assertSame(['default' => 'uk'], $this->store->getAll('locale'));
+
+        $this->ctx->switchTo('globex');
+        self::assertSame([], $this->store->getAll('locale'));
+
+        $this->ctx->switchTo('acme');
+        $this->store->setForUser('locale', 'default', 'fr', 'u1');
+        $reads = $this->reads(function (): void {
+            CoroutineLocal::resetCliStore();
+            self::assertSame(['default' => 'fr'], $this->store->getAllForUser('locale', 'u1'));
+            CoroutineLocal::resetCliStore();
+            self::assertSame(['default' => 'fr'], $this->store->getAllForUser('locale', 'u1'));
+        });
+        self::assertCount(2, $reads, 'per-user reads keep their per-request semantics');
+    }
+
+    /** Swap the store's snapshot clock for one the test moves by hand. */
+    private function freezeSnapshotClock(): \stdClass
+    {
+        $now = new \stdClass();
+        $now->value = 1000.0;
+        (new \ReflectionProperty(SettingsStore::class, 'snapshots'))
+            ->setValue($this->store, new SettingsModuleSnapshots(static fn (): float => $now->value));
+
+        return $now;
     }
 
     #[Test]

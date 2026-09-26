@@ -1,0 +1,178 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Semitexa\Platform\Settings\Tests\Unit;
+
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\TestCase;
+use Semitexa\Platform\Settings\Application\Service\SettingsModuleSnapshots;
+
+final class SettingsModuleSnapshotsTest extends TestCase
+{
+    private float $now = 1000.0;
+
+    private function snapshots(): SettingsModuleSnapshots
+    {
+        return new SettingsModuleSnapshots(fn (): float => $this->now);
+    }
+
+    #[Test]
+    public function a_snapshot_is_served_until_its_ttl_runs_out(): void
+    {
+        $snapshots = $this->snapshots();
+        $loads = 0;
+        $load = function () use (&$loads): array {
+            return ['n' => ++$loads];
+        };
+
+        self::assertSame(['n' => 1], $snapshots->get('acme', 'locale', $load));
+        $this->now += SettingsModuleSnapshots::TTL_SECONDS - 0.01;
+        self::assertSame(['n' => 1], $snapshots->get('acme', 'locale', $load));
+        $this->now += 0.02;
+        self::assertSame(['n' => 2], $snapshots->get('acme', 'locale', $load));
+    }
+
+    #[Test]
+    public function tenants_and_modules_never_share_a_snapshot(): void
+    {
+        $snapshots = $this->snapshots();
+
+        $snapshots->get('acme', 'locale', static fn (): array => ['default' => 'uk']);
+
+        self::assertSame(['default' => 'en'], $snapshots->get('globex', 'locale', static fn (): array => ['default' => 'en']));
+        self::assertSame([], $snapshots->get('acme', 'site_head', static fn (): array => []));
+        self::assertSame(['default' => 'uk'], $snapshots->get('acme', 'locale', static fn (): array => ['default' => 'xx']));
+    }
+
+    #[Test]
+    public function forget_drops_the_snapshot_at_once(): void
+    {
+        $snapshots = $this->snapshots();
+        $snapshots->get('acme', 'locale', static fn (): array => ['default' => 'uk']);
+
+        $snapshots->forget('acme', 'locale');
+
+        self::assertSame(['default' => 'de'], $snapshots->get('acme', 'locale', static fn (): array => ['default' => 'de']));
+    }
+
+    #[Test]
+    public function a_load_that_raced_a_forget_is_not_stored(): void
+    {
+        $snapshots = $this->snapshots();
+
+        // The load yields (database I/O) and a write in another coroutine lands meanwhile.
+        $stale = $snapshots->get('acme', 'locale', static function () use ($snapshots): array {
+            $snapshots->forget('acme', 'locale');
+
+            return ['default' => 'old'];
+        });
+
+        self::assertSame(['default' => 'old'], $stale, 'the racing caller still gets what it read');
+        self::assertSame(['default' => 'new'], $snapshots->get('acme', 'locale', static fn (): array => ['default' => 'new']));
+    }
+
+    #[Test]
+    public function a_failed_load_is_rethrown_without_retrying_until_its_window_ends(): void
+    {
+        $snapshots = $this->snapshots();
+        $attempts = 0;
+        $failing = function () use (&$attempts): array {
+            ++$attempts;
+            throw new \PDOException('SQLSTATE[HY000] [2002] Connection refused');
+        };
+
+        $first = null;
+        for ($i = 0; $i < 3; ++$i) {
+            try {
+                $snapshots->get('acme', 'locale', $failing);
+                self::fail('expected the load failure to surface');
+            } catch (\Throwable $e) {
+                self::assertStringContainsString('Connection refused', $e->getMessage());
+                if ($first === null) {
+                    self::assertInstanceOf(\PDOException::class, $e, 'the live failure surfaces as itself');
+                    $first = $e;
+                } else {
+                    self::assertNotSame($first, $e, 'a remembered failure is a fresh exception, not the first request\'s instance');
+                    self::assertStringContainsString('PDOException', $e->getMessage());
+                }
+            }
+        }
+        self::assertSame(1, $attempts, 'an outage costs one connect attempt per window, not one per request');
+
+        $this->now += SettingsModuleSnapshots::FAILURE_TTL_SECONDS + 0.01;
+        self::assertSame(['default' => 'uk'], $snapshots->get('acme', 'locale', static fn (): array => ['default' => 'uk']));
+    }
+
+    #[Test]
+    public function concurrent_misses_share_one_load_and_its_failure(): void
+    {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
+        $snapshots = $this->snapshots();
+        $attempts = 0;
+        $failures = [];
+
+        \Swoole\Coroutine\run(function () use ($snapshots, &$attempts, &$failures): void {
+            $wg = new \Swoole\Coroutine\WaitGroup();
+            for ($i = 0; $i < 5; ++$i) {
+                $wg->add();
+                \Swoole\Coroutine::create(function () use ($snapshots, &$attempts, &$failures, $wg): void {
+                    try {
+                        $snapshots->get('acme', 'locale', function () use (&$attempts): array {
+                            ++$attempts;
+                            \Swoole\Coroutine::sleep(0.05); // the connect attempt yields
+                            throw new \PDOException('SQLSTATE[HY000] [2002] Connection refused');
+                        });
+                    } catch (\Throwable $e) {
+                        $failures[] = $e->getMessage();
+                    } finally {
+                        $wg->done();
+                    }
+                });
+            }
+            $wg->wait();
+        });
+
+        self::assertSame(1, $attempts, 'concurrent misses wait for the one in-flight load');
+        self::assertCount(5, $failures);
+        foreach ($failures as $message) {
+            self::assertStringContainsString('Connection refused', $message);
+        }
+    }
+
+    #[Test]
+    public function a_waiter_reloads_when_the_load_it_waited_for_raced_a_forget(): void
+    {
+        if (!class_exists(\Swoole\Coroutine::class)) {
+            self::markTestSkipped('Swoole extension is required.');
+        }
+
+        $snapshots = $this->snapshots();
+        $seen = [];
+
+        \Swoole\Coroutine\run(function () use ($snapshots, &$seen): void {
+            $wg = new \Swoole\Coroutine\WaitGroup(2);
+            \Swoole\Coroutine::create(function () use ($snapshots, &$seen, $wg): void {
+                $seen['leader'] = $snapshots->get('acme', 'locale', static function () use ($snapshots): array {
+                    \Swoole\Coroutine::sleep(0.05);
+                    $snapshots->forget('acme', 'locale'); // a write lands mid-load
+
+                    return ['default' => 'old'];
+                });
+                $wg->done();
+            });
+            \Swoole\Coroutine::create(function () use ($snapshots, &$seen, $wg): void {
+                $seen['waiter'] = $snapshots->get('acme', 'locale', static fn (): array => ['default' => 'new']);
+                $wg->done();
+            });
+            $wg->wait();
+        });
+
+        self::assertSame(['default' => 'old'], $seen['leader']);
+        self::assertSame(['default' => 'new'], $seen['waiter'], 'the detached load is not handed to waiters');
+        self::assertSame(['default' => 'new'], $snapshots->get('acme', 'locale', static fn (): array => ['default' => 'x']));
+    }
+}
