@@ -1,6 +1,10 @@
 # semitexa/platform-settings
 
-System settings store for modules with per-tenant isolation and WM desktop integration.
+System settings store for modules with per-tenant isolation.
+
+## Install
+
+Included in every project created by the installer (https://semitexa.com/install.sh).
 
 ## Purpose
 
@@ -8,17 +12,16 @@ Provides a key-value settings store scoped by module and optional tenant. Any mo
 
 ## Role in Semitexa
 
-Depends on Core, ORM, and Platform WM. Used by platform modules to store runtime configuration. Exposes a WM desktop app for browsing settings across modules.
+Depends on Core, ORM and Update (a data patch backfills `tenant_id`). Used by platform modules to store runtime configuration.
 
 ## Key Features
 
-- `SettingsStoreInterface` contract: `get`, `set`, `getAll`, `remove` per module key
+- `SettingsStoreInterface` contract: `get`, `set`, `getAll`, `remove`, `has`, `claim` per module key, plus `*ForUser` variants for personal settings
 - Automatic tenant isolation via `tenant_id` scoping
 - JSON-serializable values (scalar, array, object)
 - ORM-backed persistence (`platform_settings` table, auto-synced via `orm:sync`)
-- System Settings WM app for desktop browsing (read-only overview)
-- Global fallback when tenancy is disabled (`tenant_id = NULL`)
+- Without a tenant context, settings are stored under the `default` tenant
 
 ## Notes
 
-Settings are scoped by `(module_key, key, tenant_id)`. Module keys identify the owning package (e.g., `platform-user`, `platform-wm`). The WM app provides visibility but modules interact programmatically via the injected `SettingsStoreInterface`.
+Settings are scoped by `(tenant_id, user_id, module_key, key)`; `user_id` is NULL for module-wide settings. Module keys identify the owning package (e.g., `platform-user`). Modules interact programmatically via the injected `SettingsStoreInterface`.
