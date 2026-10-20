@@ -44,7 +44,8 @@ final class SettingsFeatureFlags implements FeatureFlagsInterface
     #[InjectAsReadonly]
     protected TenantContextStoreInterface $tenants;
 
-    #[InjectAsMutable]
+    /** Optional: a command or a job has no request, and asks forSubject() instead. */
+    #[InjectAsMutable(optional: true)]
     protected AuthContextInterface $auth;
 
     private ?FeatureFlagStores $stores = null;
@@ -70,34 +71,49 @@ final class SettingsFeatureFlags implements FeatureFlagsInterface
 
     public function isEnabled(string $flag): bool
     {
+        return $this->explain($flag)['enabled'];
+    }
+
+    /**
+     * The answer and where it came from: `user`, `site`, `global`, `declared`,
+     * `undeclared`, or `fallback` when the store could not be read.
+     *
+     * @return array{enabled: bool, source: string, value: mixed}
+     */
+    public function explain(string $flag): array
+    {
         $declared = $this->registry->get($flag);
         if ($declared === null) {
             $this->warnUndeclared($flag);
 
-            return false;
+            return ['enabled' => false, 'source' => 'undeclared', 'value' => null];
         }
 
         $tenantId = $this->tenantId() ?? FeatureFlagStores::GLOBAL_TENANT;
         $userId = $this->userId();
-        $subject = $userId ?? ($tenantId !== FeatureFlagStores::GLOBAL_TENANT ? $tenantId : null);
+        // A guest is decided by site; on a single-site install the site is `default`.
+        $subject = $userId ?? $tenantId;
 
         try {
-            $value = $this->override($flag, $tenantId, $userId);
+            [$source, $value] = $this->override($flag, $tenantId, $userId);
         } catch (\Throwable $e) {
             StaticLoggerBridge::warning('feature', 'Feature flag overrides could not be read; the declared default answers', [
                 'flag' => $flag,
                 'error' => $e->getMessage(),
             ]);
 
-            return $declared->defaultFor($subject);
+            return ['enabled' => $declared->defaultFor($subject), 'source' => 'fallback', 'value' => null];
         }
 
-        return match (true) {
+        $enabled = match (true) {
             is_bool($value) => $value,
-            is_array($value) && isset($value['percent']) && is_numeric($value['percent'])
-                => $subject !== null && FeatureFlag::rollsOutTo($flag, (int) $value['percent'], $subject),
-            default => $declared->defaultFor($subject),
+            self::isRollout($value) => FeatureFlag::rollsOutTo($flag, (int) $value['percent'], $subject),
+            default => null,
         };
+
+        return $enabled === null
+            ? ['enabled' => $declared->defaultFor($subject), 'source' => 'declared', 'value' => $declared->percent !== null ? ['percent' => $declared->percent] : $declared->default]
+            : ['enabled' => $enabled, 'source' => $source, 'value' => $value];
     }
 
     public function forSubject(?string $tenantId, ?string $userId): FeatureFlagsInterface
@@ -111,26 +127,45 @@ final class SettingsFeatureFlags implements FeatureFlagsInterface
         return $pinned;
     }
 
-    /** The most specific stored value, or null when nothing overrides the declaration. */
-    private function override(string $flag, string $tenantId, ?string $userId): mixed
+    /**
+     * The most specific stored value and its scope; [declared, null] when
+     * nothing overrides the declaration.
+     *
+     * @return array{0: string, 1: mixed}
+     */
+    private function override(string $flag, string $tenantId, ?string $userId): array
     {
         $stores = $this->stores ??= new FeatureFlagStores($this->settings);
 
         if ($userId !== null) {
             $rows = $this->userRows[$tenantId . "\0" . $userId]
                 ??= $stores->for($tenantId)->getAllForUser(FeatureFlagStores::MODULE, $userId);
-            if (($rows[$flag] ?? null) !== null) {
-                return $rows[$flag];
+            if (self::isValue($rows[$flag] ?? null)) {
+                return ['user', $rows[$flag]];
             }
         }
         if ($tenantId !== FeatureFlagStores::GLOBAL_TENANT) {
             $site = $stores->for($tenantId)->getAll(FeatureFlagStores::MODULE)[$flag] ?? null;
-            if ($site !== null) {
-                return $site;
+            if (self::isValue($site)) {
+                return ['site', $site];
             }
         }
 
-        return $stores->for(FeatureFlagStores::GLOBAL_TENANT)->getAll(FeatureFlagStores::MODULE)[$flag] ?? null;
+        $global = $stores->for(FeatureFlagStores::GLOBAL_TENANT)->getAll(FeatureFlagStores::MODULE)[$flag] ?? null;
+
+        return self::isValue($global) ? ['global', $global] : ['declared', null];
+    }
+
+    /** A stored override this reads: on, off or a rollout. Anything else is skipped, not trusted. */
+    private static function isValue(mixed $value): bool
+    {
+        return is_bool($value) || self::isRollout($value);
+    }
+
+    /** @phpstan-assert-if-true array{percent: int|string} $value */
+    private static function isRollout(mixed $value): bool
+    {
+        return is_array($value) && isset($value['percent']) && is_numeric($value['percent']);
     }
 
     private function userId(): ?string

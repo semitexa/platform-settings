@@ -31,6 +31,14 @@ final class FeatureFlagStores
             return $this->store;
         }
 
+        if ($this->pinned === []) {
+            // A clone shares the store's snapshot cache only if the store has
+            // built it: a cold store's clones each built their own, so nothing
+            // was cached across requests and a write cleared another copy. One
+            // getAll() builds it (and is itself served from it next time).
+            $this->store->getAll(self::MODULE);
+        }
+
         return $this->pinned[$tenantId] ??= (clone $this->store)->withTenantContextStore(new PinnedTenantContextStore($tenantId));
     }
 }

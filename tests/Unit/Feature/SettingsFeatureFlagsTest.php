@@ -88,6 +88,46 @@ final class SettingsFeatureFlagsTest extends TestCase
     }
 
     #[Test]
+    public function a_write_reaches_the_next_request_on_a_store_that_was_cold(): void
+    {
+        // review: a cold store's clones each built their own snapshot cache, so
+        // the next request read a stale copy and nothing was cached across requests.
+        $before = SettingsFeatureFlags::of($this->registry, $this->store)->forSubject('acme', null);
+        self::assertFalse($before->isEnabled('checkout.new-flow'));
+
+        FeatureFlagWriter::of($this->store)->enable('checkout.new-flow', 'acme');
+
+        self::assertTrue($before->isEnabled('checkout.new-flow'), 'the write cleared the snapshot every clone reads');
+        $nextRequest = SettingsFeatureFlags::of($this->registry, $this->store)->forSubject('acme', null);
+        self::assertTrue($nextRequest->isEnabled('checkout.new-flow'));
+    }
+
+    #[Test]
+    public function a_guest_on_a_single_site_install_gets_the_rollout(): void
+    {
+        // review: with no site and no user the subject was null and a stored
+        // rollout read as off, even at 100 %.
+        $writer = FeatureFlagWriter::of($this->store);
+        $flags = SettingsFeatureFlags::of($this->registry, $this->store);
+
+        $writer->rollout('checkout.new-flow', 100);
+        self::assertTrue($flags->forSubject(null, null)->isEnabled('checkout.new-flow'));
+        $writer->rollout('checkout.new-flow', 0);
+        self::assertFalse(SettingsFeatureFlags::of($this->registry, $this->store)->forSubject(null, null)->isEnabled('checkout.new-flow'));
+    }
+
+    #[Test]
+    public function a_malformed_override_is_skipped_for_the_next_scope_out(): void
+    {
+        (clone $this->store)->withTenantContextStore(new PinnedTenantContextStore('acme'))->setForUser('feature_flags', 'checkout.new-flow', 'yes', 'u1');
+        FeatureFlagWriter::of($this->store)->enable('checkout.new-flow', 'acme');
+
+        $answer = SettingsFeatureFlags::of($this->registry, $this->store)->forSubject('acme', 'u1')->explain('checkout.new-flow');
+
+        self::assertSame([true, 'site'], [$answer['enabled'], $answer['source']]);
+    }
+
+    #[Test]
     public function a_failing_store_answers_the_declared_default(): void
     {
         $broken = $this->createStub(SettingsStoreInterface::class);
