@@ -56,6 +56,9 @@ final class SettingsFeatureFlags implements FeatureFlagsInterface
     /** @var array<string, array<string, mixed>> per tenant|user, this request */
     private array $userRows = [];
 
+    /** @var array<string, \Throwable> */
+    private array $userReadFailures = [];
+
     /** @var array<string, true> */
     #[WorkerState('Undeclared flags this worker already reported: one warning each, not one per check.')]
     private static array $warned = [];
@@ -123,6 +126,7 @@ final class SettingsFeatureFlags implements FeatureFlagsInterface
         $pinned->tenantId = $tenantId;
         $pinned->userId = $userId;
         $pinned->userRows = [];
+        $pinned->userReadFailures = [];
 
         return $pinned;
     }
@@ -138,8 +142,24 @@ final class SettingsFeatureFlags implements FeatureFlagsInterface
         $stores = $this->stores ??= new FeatureFlagStores($this->settings);
 
         if ($userId !== null) {
-            $rows = $this->userRows[$tenantId . "\0" . $userId]
-                ??= $stores->for($tenantId)->getAllForUser(FeatureFlagStores::MODULE, $userId);
+            $key = $tenantId . "\0" . $userId;
+            // A failed read is remembered for the request and thrown again:
+            // with the store down every flag check tried again and waited out
+            // a connect timeout, on every signed-in page. Rethrown, not taken
+            // as "no overrides", so every answer stays the declared default
+            // rather than a site value that ignores the user's own.
+            if (isset($this->userReadFailures[$key])) {
+                throw $this->userReadFailures[$key];
+            }
+            if (!array_key_exists($key, $this->userRows)) {
+                try {
+                    $this->userRows[$key] = $stores->for($tenantId)->getAllForUser(FeatureFlagStores::MODULE, $userId);
+                } catch (\Throwable $e) {
+                    $this->userReadFailures[$key] = $e;
+                    throw $e;
+                }
+            }
+            $rows = $this->userRows[$key];
             if (self::isValue($rows[$flag] ?? null)) {
                 return ['user', $rows[$flag]];
             }
@@ -165,7 +185,10 @@ final class SettingsFeatureFlags implements FeatureFlagsInterface
     /** @phpstan-assert-if-true array{percent: int|string} $value */
     private static function isRollout(mixed $value): bool
     {
-        return is_array($value) && isset($value['percent']) && is_numeric($value['percent']);
+        // In range, as feature:set writes it: a stored "1e3" read as on for
+        // everyone and a negative one as off. Out of range is skipped.
+        return is_array($value) && isset($value['percent']) && is_numeric($value['percent'])
+            && (float) $value['percent'] >= 0 && (float) $value['percent'] <= 100;
     }
 
     private function userId(): ?string
