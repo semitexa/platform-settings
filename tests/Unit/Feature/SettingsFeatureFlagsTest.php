@@ -140,6 +140,41 @@ final class SettingsFeatureFlagsTest extends TestCase
         self::assertFalse($flags->forSubject('acme', 'u1')->isEnabled('checkout.new-flow'));
     }
 
+    /** A page with ten flag checks and the store down logged ten warnings. */
+    #[Test]
+    public function a_down_store_is_said_once_a_minute_with_the_checks_it_cost(): void
+    {
+        $broken = $this->createStub(SettingsStoreInterface::class);
+        $broken->method('getAll')->willThrowException(new \RuntimeException('database is away'));
+        $lines = [];
+        $logger = $this->createStub(\Semitexa\Core\Log\LoggerInterface::class);
+        $logger->method('warning')->willReturnCallback(static function (string $message, array $context) use (&$lines): void {
+            $lines[] = $context;
+        });
+        \Semitexa\Core\Log\StaticLoggerBridge::set($logger);
+        $at = new \ReflectionProperty(SettingsFeatureFlags::class, 'fallbackWarnedAt');
+        $unsaid = new \ReflectionProperty(SettingsFeatureFlags::class, 'fallbacksUnsaid');
+        $at->setValue(null, 0.0);
+        $unsaid->setValue(null, 0);
+        try {
+            $flags = SettingsFeatureFlags::of($this->registry, $broken)->forSubject('acme', null);
+            for ($i = 0; $i < 10; $i++) {
+                $flags->isEnabled('search.semantic');
+            }
+            self::assertCount(1, $lines, 'once, not per check');
+            self::assertSame(1, $lines[0]['checks_since_last_warning']);
+
+            $at->setValue(null, hrtime(true) / 1e9 - 61);
+            $flags->isEnabled('search.semantic');
+            self::assertCount(2, $lines);
+            self::assertSame(10, $lines[1]['checks_since_last_warning'], 'the nine said nothing, then this one');
+        } finally {
+            \Semitexa\Core\Log\StaticLoggerBridge::reset();
+            $at->setValue(null, 0.0);
+            $unsaid->setValue(null, 0);
+        }
+    }
+
     #[Test]
     public function a_user_override_needs_its_site(): void
     {

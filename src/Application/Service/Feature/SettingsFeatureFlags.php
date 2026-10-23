@@ -63,6 +63,15 @@ final class SettingsFeatureFlags implements FeatureFlagsInterface
     #[WorkerState('Undeclared flags this worker already reported: one warning each, not one per check.')]
     private static array $warned = [];
 
+    #[WorkerState('When this worker last said the overrides could not be read: once a minute, not once per flag check.')]
+    private static float $fallbackWarnedAt = 0.0;
+
+    #[WorkerState('Flag checks that fell back since that warning, said with the next one.')]
+    private static int $fallbacksUnsaid = 0;
+
+    /** Seconds between two "could not be read" warnings from one worker. */
+    private const FALLBACK_WARNING_INTERVAL = 60;
+
     public static function of(FeatureFlagRegistry $registry, SettingsStoreInterface $settings): self
     {
         $flags = new self();
@@ -100,10 +109,7 @@ final class SettingsFeatureFlags implements FeatureFlagsInterface
         try {
             [$source, $value] = $this->override($flag, $tenantId, $userId);
         } catch (\Throwable $e) {
-            StaticLoggerBridge::warning('feature', 'Feature flag overrides could not be read; the declared default answers', [
-                'flag' => $flag,
-                'error' => $e->getMessage(),
-            ]);
+            self::warnFallback($flag, $e);
 
             return ['enabled' => $declared->defaultFor($subject), 'source' => 'fallback', 'value' => null];
         }
@@ -117,6 +123,30 @@ final class SettingsFeatureFlags implements FeatureFlagsInterface
         return $enabled === null
             ? ['enabled' => $declared->defaultFor($subject), 'source' => 'declared', 'value' => $declared->percent !== null ? ['percent' => $declared->percent] : $declared->default]
             : ['enabled' => $enabled, 'source' => $source, 'value' => $value];
+    }
+
+    /**
+     * With the store down, every flag check logged a warning, a page with ten
+     * checks ten lines: once a minute per worker now, with how many fell back.
+     */
+    private static function warnFallback(string $flag, \Throwable $e): void
+    {
+        // The slot is taken before the log call, which yields to other
+        // coroutines (a hooked file write): taken after, two of them logged
+        // and the count was both doubled and short. A monotonic clock: a
+        // wall clock set back an hour silenced it for the hour.
+        $now = hrtime(true) / 1e9;
+        $count = ++self::$fallbacksUnsaid;
+        if (self::$fallbackWarnedAt > 0.0 && $now - self::$fallbackWarnedAt < self::FALLBACK_WARNING_INTERVAL) {
+            return;
+        }
+        self::$fallbackWarnedAt = $now;
+        self::$fallbacksUnsaid = 0;
+        StaticLoggerBridge::warning('feature', 'Feature flag overrides could not be read; the declared default answers', [
+            'flag' => $flag,
+            'error' => $e->getMessage(),
+            'checks_since_last_warning' => $count,
+        ]);
     }
 
     public function forSubject(?string $tenantId, ?string $userId): FeatureFlagsInterface
