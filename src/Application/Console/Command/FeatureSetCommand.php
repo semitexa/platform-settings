@@ -8,6 +8,7 @@ use Semitexa\Core\Attribute\AsCommand;
 use Semitexa\Core\Attribute\InjectAsReadonly;
 use Semitexa\Core\Console\BaseCommand;
 use Semitexa\Core\Feature\FeatureFlagRegistry;
+use Semitexa\Core\Tenant\TenantFanoutInterface;
 use Semitexa\Platform\Settings\Application\Service\Feature\FeatureFlagWriter;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -29,6 +30,9 @@ final class FeatureSetCommand extends BaseCommand
     #[InjectAsReadonly]
     protected FeatureFlagWriter $writer;
 
+    #[InjectAsReadonly]
+    protected TenantFanoutInterface $tenants;
+
     protected function configure(): void
     {
         $this->setName('feature:set')
@@ -37,7 +41,7 @@ final class FeatureSetCommand extends BaseCommand
             ->addArgument('value', InputArgument::REQUIRED, 'on | off | N% | clear')
             ->addOption('tenant', null, InputOption::VALUE_REQUIRED, 'Only this site', '')
             ->addOption('user', null, InputOption::VALUE_REQUIRED, 'Only this user of the site (needs --tenant)', '')
-            ->addOption('force', null, InputOption::VALUE_NONE, 'Set a flag no module declares');
+            ->addOption('force', null, InputOption::VALUE_NONE, 'Set a flag no module declares, or for a site that does not exist');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -53,6 +57,18 @@ final class FeatureSetCommand extends BaseCommand
             $output->writeln("<error>No module declares '{$flag}' (#[AsFeatureFlag]); it would read as off whatever is stored. Pass --force to store it anyway.</error>");
 
             return Command::FAILURE;
+        }
+
+        // A mistyped site id was stored, and the override applied to nobody
+        // while the command said it was set. A user is not checked: the user
+        // providers do not know which site a user belongs to.
+        if (!(bool) $input->getOption('force') && $tenant !== null && $tenant !== 'default') {
+            $known = $this->knownSites();
+            if (!in_array($tenant, $known, true)) {
+                $output->writeln("<error>No site '{$tenant}' (sites: " . implode(', ', $known) . '). Pass --force to store it anyway.</error>');
+
+                return Command::FAILURE;
+            }
         }
 
         try {
@@ -73,5 +89,16 @@ final class FeatureSetCommand extends BaseCommand
         $output->writeln("<info>{$flag}: {$value} for {$scope}.</info> Running workers see it within 2 s.");
 
         return Command::SUCCESS;
+    }
+
+    /** @return list<string> the sites the tenant fanout knows */
+    private function knownSites(): array
+    {
+        $known = [];
+        $this->tenants->eachTenant(static function (string $id) use (&$known): void {
+            $known[] = $id;
+        });
+
+        return $known;
     }
 }
