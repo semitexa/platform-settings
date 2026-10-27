@@ -39,6 +39,15 @@ final class FeatureListCommand extends BaseCommand
     {
         $tenant = (string) $input->getOption('tenant');
         $user = (string) $input->getOption('user');
+        // A user's rows are kept under the site the user belongs to: without
+        // --tenant they were read under the every-site row, found nothing,
+        // and the table showed the site or declared value with no warning.
+        // feature:set refuses the same combination.
+        if ($user !== '' && $tenant === '') {
+            $output->writeln('<error>--user needs --tenant: a user override is kept under the site (tenant) the user belongs to.</error>');
+
+            return Command::FAILURE;
+        }
         $flags = SettingsFeatureFlags::of($this->registry, $this->settings)->forSubject($tenant !== '' ? $tenant : null, $user !== '' ? $user : null);
 
         $rows = [];

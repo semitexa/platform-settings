@@ -22,12 +22,15 @@ final class FeatureSetCommandScopeTest extends TestCase
     #[Test]
     public function an_unknown_site_is_refused_unless_forced(): void
     {
-        $command = $this->command(['acme', 'globex']);
+        $command = $this->command(['acme', 'globex'], $orm);
 
         self::assertSame(0, $this->execute($command, ['--tenant' => 'acme', '--user' => 'u1']));
+        self::assertSame([['acme', 'u1']], self::rows($orm), 'the user row is stored');
         self::assertSame(1, $this->execute($command, ['--tenant' => 'acmee'], $out));
         self::assertStringContainsString("No site 'acmee' (sites: acme, globex)", $out);
+        self::assertSame([['acme', 'u1']], self::rows($orm), 'nothing stored for the refused site');
         self::assertSame(0, $this->execute($command, ['--tenant' => 'acmee', '--force' => true]));
+        self::assertSame([['acme', 'u1'], ['acmee', null]], self::rows($orm), 'forced, it is stored');
         // The every-site row: not one of a tenancy install's sites, but always there.
         self::assertSame(0, $this->execute($command, ['--tenant' => 'default']));
     }
@@ -42,8 +45,17 @@ final class FeatureSetCommandScopeTest extends TestCase
         return $code;
     }
 
+    /** @return list<array{0: mixed, 1: mixed}> tenant and user of every stored row */
+    private static function rows(OrmManager $orm): array
+    {
+        return array_map(
+            static fn (array $row): array => [$row['tenant_id'], $row['user_id']],
+            array_values($orm->getAdapter()->execute('SELECT tenant_id, user_id FROM platform_settings ORDER BY tenant_id, user_id')->fetchAll()),
+        );
+    }
+
     /** @param list<string> $sites */
-    private function command(array $sites): FeatureSetCommand
+    private function command(array $sites, ?OrmManager &$orm = null): FeatureSetCommand
     {
         $orm = new OrmManager(config: new ConnectionConfig(driver: 'sqlite', sqliteMemory: true));
         $orm->getAdapter()->execute('CREATE TABLE platform_settings (id TEXT PRIMARY KEY, tenant_id TEXT, user_id TEXT, module_key TEXT NOT NULL, setting_key TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT, updated_at TEXT)');

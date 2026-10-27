@@ -69,7 +69,13 @@ final class SettingsFeatureFlagsTest extends TestCase
 
         $writer->disable('search.semantic');
         self::assertFalse($flags->forSubject(null, null)->isEnabled('search.semantic'), 'a declared-on flag can be turned off');
-        self::assertFalse($flags->forSubject('acme', 'u1')->isEnabled('never.declared'), 'undeclared stays off even if stored');
+        $writer->enable('never.declared');
+        $writer->enable('never.declared', 'acme', 'u1');
+        self::assertSame(
+            ['enabled' => false, 'source' => 'undeclared', 'value' => null],
+            $flags->forSubject('acme', 'u1')->explain('never.declared'),
+            'undeclared stays off even if stored',
+        );
     }
 
     #[Test]
@@ -113,7 +119,8 @@ final class SettingsFeatureFlagsTest extends TestCase
         $writer->rollout('checkout.new-flow', 100);
         self::assertTrue($flags->forSubject(null, null)->isEnabled('checkout.new-flow'));
         $writer->rollout('checkout.new-flow', 0);
-        self::assertFalse(SettingsFeatureFlags::of($this->registry, $this->store)->forSubject(null, null)->isEnabled('checkout.new-flow'));
+        $answer = SettingsFeatureFlags::of($this->registry, $this->store)->forSubject(null, null)->explain('checkout.new-flow');
+        self::assertSame([false, 'global', ['percent' => 0]], [$answer['enabled'], $answer['source'], $answer['value']], 'the 0 % row decides, not the declared default');
     }
 
     #[Test]
