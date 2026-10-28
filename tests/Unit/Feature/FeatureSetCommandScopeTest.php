@@ -35,6 +35,22 @@ final class FeatureSetCommandScopeTest extends TestCase
         self::assertSame(0, $this->execute($command, ['--tenant' => 'default']));
     }
 
+    /** REGRESSION (review): --tenant=default wrote the every-site row and said "for site default". */
+    #[Test]
+    public function the_default_site_is_reported_as_every_site(): void
+    {
+        $command = $this->command(['acme']);
+
+        self::assertSame(0, $this->execute($command, ['--tenant' => 'default'], $out));
+        self::assertSame('checkout.new-flow: on for every site. Running workers see it within 2 s.', trim($out));
+        self::assertSame(0, $this->execute($command, [], $out));
+        self::assertSame('checkout.new-flow: on for every site. Running workers see it within 2 s.', trim($out));
+        self::assertSame(0, $this->execute($command, ['--tenant' => 'acme'], $out));
+        self::assertSame('checkout.new-flow: on for site acme. Running workers see it within 2 s.', trim($out));
+        self::assertSame(0, $this->execute($command, ['--tenant' => 'acme', '--user' => 'u1'], $out));
+        self::assertSame('checkout.new-flow: on for user u1 of acme. Running workers see it within 2 s.', trim($out));
+    }
+
     /** @param array<string, mixed> $options */
     private function execute(FeatureSetCommand $command, array $options, ?string &$output = null): int
     {

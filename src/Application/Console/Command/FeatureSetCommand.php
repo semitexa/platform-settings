@@ -9,6 +9,7 @@ use Semitexa\Core\Attribute\InjectAsReadonly;
 use Semitexa\Core\Console\BaseCommand;
 use Semitexa\Core\Feature\FeatureFlagRegistry;
 use Semitexa\Core\Tenant\TenantFanoutInterface;
+use Semitexa\Platform\Settings\Application\Service\Feature\FeatureFlagStores;
 use Semitexa\Platform\Settings\Application\Service\Feature\FeatureFlagWriter;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -85,7 +86,12 @@ final class FeatureSetCommand extends BaseCommand
             return Command::FAILURE;
         }
 
-        $scope = $user !== null ? "user {$user} of {$tenant}" : ($tenant !== null ? "site {$tenant}" : 'every site');
+        // --tenant=default is the every-site row, and is said as such.
+        $scope = match (true) {
+            $user !== null => "user {$user} of {$tenant}",
+            $tenant === null, $tenant === FeatureFlagStores::GLOBAL_TENANT => 'every site',
+            default => "site {$tenant}",
+        };
         $output->writeln("<info>{$flag}: {$value} for {$scope}.</info> Running workers see it within 2 s.");
 
         return Command::SUCCESS;
