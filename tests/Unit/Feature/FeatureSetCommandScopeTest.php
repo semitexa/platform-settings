@@ -51,7 +51,10 @@ final class FeatureSetCommandScopeTest extends TestCase
         self::assertSame('checkout.new-flow: on for user u1 of acme. Running workers see it within 2 s.', trim($out));
     }
 
-    /** @param array<string, mixed> $options */
+    /**
+     * @param array<string, mixed> $options
+     * @param-out string $output
+     */
     private function execute(FeatureSetCommand $command, array $options, ?string &$output = null): int
     {
         $tester = new CommandTester($command);
@@ -70,7 +73,10 @@ final class FeatureSetCommandScopeTest extends TestCase
         );
     }
 
-    /** @param list<string> $sites */
+    /**
+     * @param list<string> $sites
+     * @param-out OrmManager $orm
+     */
     private function command(array $sites, ?OrmManager &$orm = null): FeatureSetCommand
     {
         $orm = new OrmManager(config: new ConnectionConfig(driver: 'sqlite', sqliteMemory: true));
