@@ -29,6 +29,12 @@
         "semitexa-module": {
             "name": "platform-settings",
             "description": "System settings: key-value store per module, multi-tenant aware"
+        },
+        "semitexa": {
+            "floors": {
+                "semitexa/core": "next",
+                "semitexa/orm": "next"
+            }
         }
     },
     "keywords": [
