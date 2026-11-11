@@ -8,6 +8,7 @@ use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Core\Environment;
 use Semitexa\Core\Support\CoroutineLocal;
+use Semitexa\Orm\Domain\Model\ConnectionConfig;
 use Semitexa\Orm\OrmManager;
 use Semitexa\Platform\Settings\Application\Service\SettingsStore;
 
@@ -116,6 +117,40 @@ final class SettingsWriteJoinsTransactionTest extends TestCase
         self::assertNull($outcome['insert_read'], 'a read after the rollback finds no inserted setting');
         self::assertSame(['after', 'after'], $outcome['inside'], 'inside, the store reads what it wrote');
         self::assertSame(['before', 'before'], $outcome['after'], 'after the rollback, neither cache serves the rolled-back value');
+    }
+
+    /** A rolled-back savepoint drops what its reads cached, and the outer commit keeps it dropped (review). */
+    #[Test]
+    public function a_rolled_back_savepoint_leaves_no_cached_value_behind(): void
+    {
+        $orm = new OrmManager(config: new ConnectionConfig(driver: 'sqlite', sqliteMemory: true));
+        $orm->getAdapter()->execute('CREATE TABLE platform_settings (id TEXT PRIMARY KEY, tenant_id TEXT, user_id TEXT,
+            module_key TEXT NOT NULL, setting_key TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT, updated_at TEXT)');
+        $store = (new \ReflectionClass(SettingsStore::class))->newInstanceWithoutConstructor();
+        (new \ReflectionProperty(SettingsStore::class, 'orm'))->setValue($store, $orm);
+        $store->set(self::MODULE, 'k', 'before');
+        $probe = new \RuntimeException('deliberate rollback');
+        $seen = [];
+
+        $orm->getTransactionManager()->run(static function () use ($orm, $store, $probe, &$seen): void {
+            try {
+                $orm->getTransactionManager()->run(static function () use ($store, $probe, &$seen): void {
+                    $store->set(self::MODULE, 'k', 'after');
+                    $seen['inside'] = [$store->get(self::MODULE, 'k'), $store->getAll(self::MODULE)['k'] ?? null];
+                    throw $probe;
+                });
+            } catch (\RuntimeException $e) {
+                if ($e !== $probe) {
+                    throw $e;
+                }
+            }
+            $seen['outer'] = [$store->get(self::MODULE, 'k'), $store->getAll(self::MODULE)['k'] ?? null];
+        });
+        $seen['committed'] = [$store->get(self::MODULE, 'k'), $store->getAll(self::MODULE)['k'] ?? null];
+
+        self::assertSame(['after', 'after'], $seen['inside']);
+        self::assertSame(['before', 'before'], $seen['outer'], 'the savepoint rollback dropped both caches');
+        self::assertSame(['before', 'before'], $seen['committed']);
     }
 
     private function requireMysql(): void
