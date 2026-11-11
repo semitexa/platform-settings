@@ -121,7 +121,7 @@ final class SettingsStore implements SettingsStoreInterface
         // whose $expected still matches the stored value performs the write.
         // Each placeholder is bound once — native prepares reject a reused name.
         $encodedExpected = json_encode($expected, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE | \JSON_UNESCAPED_SLASHES);
-        $result = $this->orm()->getAdapter()->execute(
+        $result = $this->orm()->getQueryAdapter()->execute(
             'UPDATE `platform_settings`
                 SET value = :next_value, updated_at = :updated_at
               WHERE tenant_id = :tenant_id
@@ -225,7 +225,7 @@ final class SettingsStore implements SettingsStoreInterface
 
         try {
             $userClause = $userId === null ? 'NULL' : ':user_id';
-            $this->orm()->getAdapter()->execute(
+            $this->orm()->getQueryAdapter()->execute(
                 "INSERT INTO `platform_settings`
                     (id, tenant_id, user_id, module_key, setting_key, value, created_at, updated_at)
                  VALUES (:id, :tenant_id, {$userClause}, :module_key, :setting_key, :value, :created_at, :updated_at)",
@@ -261,7 +261,7 @@ final class SettingsStore implements SettingsStoreInterface
     private function updateScopeValue(string $moduleKey, string $key, ?string $userId, string $encoded, string $now): int
     {
         $userClause = $userId === null ? 'user_id IS NULL' : 'user_id = :user_id';
-        $result = $this->orm()->getAdapter()->execute(
+        $result = $this->orm()->getQueryAdapter()->execute(
             "UPDATE `platform_settings`
                 SET value = :value, updated_at = :updated_at
               WHERE tenant_id = :tenant_id AND module_key = :module_key AND setting_key = :setting_key AND {$userClause}",
