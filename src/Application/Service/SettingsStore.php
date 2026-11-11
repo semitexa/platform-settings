@@ -9,6 +9,7 @@ use Semitexa\Core\Attribute\SatisfiesServiceContract;
 use Semitexa\Core\Tenant\TenantContextAccess;
 use Semitexa\Core\Tenant\TenantContextStoreInterface;
 use Semitexa\Orm\Application\Service\OrmBackedStore;
+use Semitexa\Orm\Exception\ConstraintViolationException;
 use Semitexa\Orm\OrmManager;
 use Semitexa\Orm\Query\Operator;
 use Semitexa\Orm\Repository\DomainRepository;
@@ -121,7 +122,7 @@ final class SettingsStore implements SettingsStoreInterface
         // whose $expected still matches the stored value performs the write.
         // Each placeholder is bound once — native prepares reject a reused name.
         $encodedExpected = json_encode($expected, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE | \JSON_UNESCAPED_SLASHES);
-        $result = $this->orm()->getAdapter()->execute(
+        $result = $this->orm()->getQueryAdapter()->execute(
             'UPDATE `platform_settings`
                 SET value = :next_value, updated_at = :updated_at
               WHERE tenant_id = :tenant_id
@@ -225,7 +226,7 @@ final class SettingsStore implements SettingsStoreInterface
 
         try {
             $userClause = $userId === null ? 'NULL' : ':user_id';
-            $this->orm()->getAdapter()->execute(
+            $this->orm()->getQueryAdapter()->execute(
                 "INSERT INTO `platform_settings`
                     (id, tenant_id, user_id, module_key, setting_key, value, created_at, updated_at)
                  VALUES (:id, :tenant_id, {$userClause}, :module_key, :setting_key, :value, :created_at, :updated_at)",
@@ -242,9 +243,8 @@ final class SettingsStore implements SettingsStoreInterface
                     $userId === null ? [] : ['user_id' => $userId],
                 ),
             );
-        } catch (\Throwable) {
-            // Lost the first-write race: another writer inserted the same
-            // deterministic id first (PK violation). The row exists now — update it.
+        } catch (ConstraintViolationException) {
+            // Lost the first-write race (PK violation): update the row. Only that: a deadlock rolled back the caller's transaction and must reach it (Fable review).
             $this->updateScopeValue($moduleKey, $key, $userId, $encoded, $now);
         }
 
@@ -261,7 +261,7 @@ final class SettingsStore implements SettingsStoreInterface
     private function updateScopeValue(string $moduleKey, string $key, ?string $userId, string $encoded, string $now): int
     {
         $userClause = $userId === null ? 'user_id IS NULL' : 'user_id = :user_id';
-        $result = $this->orm()->getAdapter()->execute(
+        $result = $this->orm()->getQueryAdapter()->execute(
             "UPDATE `platform_settings`
                 SET value = :value, updated_at = :updated_at
               WHERE tenant_id = :tenant_id AND module_key = :module_key AND setting_key = :setting_key AND {$userClause}",
@@ -309,9 +309,8 @@ final class SettingsStore implements SettingsStoreInterface
             return $out;
         };
 
-        // Global scope: a worker-local snapshot with a short TTL — see SettingsModuleSnapshots
-        // for why, and for what a write elsewhere costs in staleness.
-        return $userId === null
+        // Global scope: a worker-local snapshot (see SettingsModuleSnapshots), never in a transaction, where it would share an uncommitted value.
+        return $userId === null && !$this->orm()->getTransactionManager()->isActive()
             ? ($this->snapshots ??= new SettingsModuleSnapshots())->get($this->currentTenantId(), $moduleKey, $load)
             : $load();
     }
@@ -386,14 +385,17 @@ final class SettingsStore implements SettingsStoreInterface
         return $resource;
     }
 
-    /** Drop one scope after a write, so the next read in this request sees what it wrote. */
-    private function forgetRead(string $moduleKey, string $key, ?string $userId): void
+    /** Drop one scope after a write; again on rollback (a read since cached the value) and, for the snapshot, on commit. */
+    private function forgetRead(string $moduleKey, string $key, ?string $userId, ?string $tenantId = null): void
     {
-        $this->reads()->forget($this->currentTenantId(), $moduleKey, $key, $userId);
+        $tenantId ??= $this->currentTenantId();
+        $this->reads()->forget($tenantId, $moduleKey, $key, $userId);
         // Snapshots hold the global scope only; a per-user write leaves them valid.
         if ($userId === null) {
-            $this->snapshots?->forget($this->currentTenantId(), $moduleKey);
+            $this->snapshots?->forget($tenantId, $moduleKey);
+            $this->orm()->getTransactionManager()->afterCommit(fn () => $this->snapshots?->forget($tenantId, $moduleKey));
         }
+        $this->orm()->getTransactionManager()->afterRollback(fn () => $this->forgetRead($moduleKey, $key, $userId, $tenantId));
     }
 
     /** @return list<Setting> every row of one module and scope, in one statement */
