@@ -8,6 +8,7 @@ use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Core\Environment;
 use Semitexa\Core\Support\CoroutineLocal;
+use Semitexa\Core\Tenant\TenantContextAccess;
 use Semitexa\Orm\Domain\Model\ConnectionConfig;
 use Semitexa\Orm\OrmManager;
 use Semitexa\Platform\Settings\Application\Service\SettingsStore;
@@ -95,7 +96,11 @@ final class SettingsWriteJoinsTransactionTest extends TestCase
                     $failure = $e;
                 } finally {
                     try {
-                        $orm->getQueryAdapter()->execute('DELETE FROM `platform_settings` WHERE module_key = :m', ['m' => self::$module]);
+                        // Only this run's rows: its own key, the tenant and the global scope it wrote in (review).
+                        $orm->getQueryAdapter()->execute(
+                            'DELETE FROM `platform_settings` WHERE module_key = :m AND tenant_id = :t AND user_id IS NULL',
+                            ['m' => self::$module, 't' => TenantContextAccess::tenantIdOrDefault(null)],
+                        );
                     } catch (\Throwable $e) {
                         $failure ??= $e;
                     } finally {
