@@ -9,6 +9,7 @@ use Semitexa\Core\Attribute\SatisfiesServiceContract;
 use Semitexa\Core\Tenant\TenantContextAccess;
 use Semitexa\Core\Tenant\TenantContextStoreInterface;
 use Semitexa\Orm\Application\Service\OrmBackedStore;
+use Semitexa\Orm\Exception\ConstraintViolationException;
 use Semitexa\Orm\OrmManager;
 use Semitexa\Orm\Query\Operator;
 use Semitexa\Orm\Repository\DomainRepository;
@@ -242,9 +243,8 @@ final class SettingsStore implements SettingsStoreInterface
                     $userId === null ? [] : ['user_id' => $userId],
                 ),
             );
-        } catch (\Throwable) {
-            // Lost the first-write race: another writer inserted the same
-            // deterministic id first (PK violation). The row exists now — update it.
+        } catch (ConstraintViolationException) {
+            // Lost the first-write race (PK violation): update the row. Only that: a deadlock rolled back the caller's transaction and must reach it (Fable review).
             $this->updateScopeValue($moduleKey, $key, $userId, $encoded, $now);
         }
 
@@ -309,9 +309,8 @@ final class SettingsStore implements SettingsStoreInterface
             return $out;
         };
 
-        // Global scope: a worker-local snapshot with a short TTL — see SettingsModuleSnapshots
-        // for why, and for what a write elsewhere costs in staleness.
-        return $userId === null
+        // Global scope: a worker-local snapshot (see SettingsModuleSnapshots), never in a transaction, where it would share an uncommitted value.
+        return $userId === null && !$this->orm()->getTransactionManager()->isActive()
             ? ($this->snapshots ??= new SettingsModuleSnapshots())->get($this->currentTenantId(), $moduleKey, $load)
             : $load();
     }
@@ -386,7 +385,7 @@ final class SettingsStore implements SettingsStoreInterface
         return $resource;
     }
 
-    /** Drop one scope after a write; again if its transaction rolls back, as a read since cached the value. */
+    /** Drop one scope after a write; again on rollback (a read since cached the value) and, for the snapshot, on commit. */
     private function forgetRead(string $moduleKey, string $key, ?string $userId, ?string $tenantId = null): void
     {
         $tenantId ??= $this->currentTenantId();
@@ -394,6 +393,7 @@ final class SettingsStore implements SettingsStoreInterface
         // Snapshots hold the global scope only; a per-user write leaves them valid.
         if ($userId === null) {
             $this->snapshots?->forget($tenantId, $moduleKey);
+            $this->orm()->getTransactionManager()->afterCommit(fn () => $this->snapshots?->forget($tenantId, $moduleKey));
         }
         $this->orm()->getTransactionManager()->afterRollback(fn () => $this->forgetRead($moduleKey, $key, $userId, $tenantId));
     }
