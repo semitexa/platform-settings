@@ -40,6 +40,7 @@ final class SettingsWriteJoinsTransactionTest extends TestCase
         $this->requireMysql();
         $outcome = null;
         $failure = null;
+        $hooks = \Swoole\Runtime::getHookFlags();
         \Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL);
         try {
             \Swoole\Coroutine\run(function () use (&$outcome, &$failure): void {
@@ -52,24 +53,38 @@ final class SettingsWriteJoinsTransactionTest extends TestCase
                     $orm->getQueryAdapter()->execute('DELETE FROM `platform_settings` WHERE module_key = :m', ['m' => self::MODULE]);
                     $store = (new \ReflectionClass(SettingsStore::class))->newInstanceWithoutConstructor();
                     (new \ReflectionProperty(SettingsStore::class, 'orm'))->setValue($store, $orm);
+                    // Only the deliberate rollback is caught, by identity: a write
+                    // or a transaction start that fails fails the test (review).
+                    $probe = new \RuntimeException('deliberate rollback');
+                    $rolledBack = static function (\RuntimeException $e) use ($probe): void {
+                        if ($e !== $probe) {
+                            throw $e;
+                        }
+                    };
                     try {
-                        $orm->getTransactionManager()->run(static function () use ($store): void {
+                        $orm->getTransactionManager()->run(static function () use ($store, $probe): void {
                             $store->set(self::MODULE, 'inserted', 'a');
-                            throw new \RuntimeException('roll back');
+                            throw $probe;
                         });
-                    } catch (\RuntimeException) {
+                    } catch (\RuntimeException $e) {
+                        $rolledBack($e);
                     }
                     $outcome['insert'] = $count();
+                    $outcome['insert_read'] = $store->get(self::MODULE, 'inserted');
 
                     // The UPDATE path: a row that exists, changed and rolled back.
                     $store->set(self::MODULE, 'updated', 'before');
                     try {
-                        $orm->getTransactionManager()->run(static function () use ($store): void {
+                        $orm->getTransactionManager()->run(static function () use ($store, $probe, &$outcome): void {
                             $store->set(self::MODULE, 'updated', 'after');
-                            throw new \RuntimeException('roll back');
+                            // Read through the store inside: both caches now hold "after".
+                            $outcome['inside'] = [$store->get(self::MODULE, 'updated'), $store->getAll(self::MODULE)['updated'] ?? null];
+                            throw $probe;
                         });
-                    } catch (\RuntimeException) {
+                    } catch (\RuntimeException $e) {
+                        $rolledBack($e);
                     }
+                    $outcome['after'] = [$store->get(self::MODULE, 'updated'), $store->getAll(self::MODULE)['updated'] ?? null];
                     $outcome['update'] = $orm->getQueryAdapter()->execute(
                         'SELECT value FROM `platform_settings` WHERE module_key = :m AND setting_key = :k',
                         ['m' => self::MODULE, 'k' => 'updated'],
@@ -87,9 +102,10 @@ final class SettingsWriteJoinsTransactionTest extends TestCase
                 }
             });
         } finally {
-            // Hooks off outside a coroutine, every later Co\run() hooking again.
+            // Hooks off outside a coroutine (switched on there they broke PDO in
+            // later tests), and every later Co\run() hooking as it did before.
             \Swoole\Runtime::enableCoroutine(0);
-            \Swoole\Coroutine::set(['hook_flags' => SWOOLE_HOOK_ALL]);
+            \Swoole\Coroutine::set(['hook_flags' => $hooks ?: SWOOLE_HOOK_ALL]);
         }
 
         if ($failure !== null) {
@@ -97,6 +113,9 @@ final class SettingsWriteJoinsTransactionTest extends TestCase
         }
         self::assertSame(0, $outcome['insert'], 'the inserted setting rolled back with the transaction');
         self::assertSame('"before"', $outcome['update'], 'the updated setting rolled back with the transaction');
+        self::assertNull($outcome['insert_read'], 'a read after the rollback finds no inserted setting');
+        self::assertSame(['after', 'after'], $outcome['inside'], 'inside, the store reads what it wrote');
+        self::assertSame(['before', 'before'], $outcome['after'], 'after the rollback, neither cache serves the rolled-back value');
     }
 
     private function requireMysql(): void
