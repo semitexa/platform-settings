@@ -23,10 +23,12 @@ use Semitexa\Platform\Settings\Application\Service\SettingsStore;
  */
 final class SettingsWriteJoinsTransactionTest extends TestCase
 {
-    private const MODULE = 'tx-probe';
+    /** Unique per run: the test deletes only its own rows in a database others use (review). */
+    private static string $module = '';
 
     protected function setUp(): void
     {
+        self::$module = 'tx-probe-' . bin2hex(random_bytes(6));
         CoroutineLocal::resetCliStore();
     }
 
@@ -48,10 +50,9 @@ final class SettingsWriteJoinsTransactionTest extends TestCase
                 $orm = new OrmManager();
                 $count = static fn (): int => count($orm->getQueryAdapter()->execute(
                     'SELECT id FROM `platform_settings` WHERE module_key = :m',
-                    ['m' => self::MODULE],
+                    ['m' => self::$module],
                 )->rows);
                 try {
-                    $orm->getQueryAdapter()->execute('DELETE FROM `platform_settings` WHERE module_key = :m', ['m' => self::MODULE]);
                     $store = (new \ReflectionClass(SettingsStore::class))->newInstanceWithoutConstructor();
                     (new \ReflectionProperty(SettingsStore::class, 'orm'))->setValue($store, $orm);
                     // Only the deliberate rollback is caught, by identity: a write
@@ -64,37 +65,37 @@ final class SettingsWriteJoinsTransactionTest extends TestCase
                     };
                     try {
                         $orm->getTransactionManager()->run(static function () use ($store, $probe): void {
-                            $store->set(self::MODULE, 'inserted', 'a');
+                            $store->set(self::$module, 'inserted', 'a');
                             throw $probe;
                         });
                     } catch (\RuntimeException $e) {
                         $rolledBack($e);
                     }
                     $outcome['insert'] = $count();
-                    $outcome['insert_read'] = $store->get(self::MODULE, 'inserted');
+                    $outcome['insert_read'] = $store->get(self::$module, 'inserted');
 
                     // The UPDATE path: a row that exists, changed and rolled back.
-                    $store->set(self::MODULE, 'updated', 'before');
+                    $store->set(self::$module, 'updated', 'before');
                     try {
                         $orm->getTransactionManager()->run(static function () use ($store, $probe, &$outcome): void {
-                            $store->set(self::MODULE, 'updated', 'after');
+                            $store->set(self::$module, 'updated', 'after');
                             // Read through the store inside: both caches now hold "after".
-                            $outcome['inside'] = [$store->get(self::MODULE, 'updated'), $store->getAll(self::MODULE)['updated'] ?? null];
+                            $outcome['inside'] = [$store->get(self::$module, 'updated'), $store->getAll(self::$module)['updated'] ?? null];
                             throw $probe;
                         });
                     } catch (\RuntimeException $e) {
                         $rolledBack($e);
                     }
-                    $outcome['after'] = [$store->get(self::MODULE, 'updated'), $store->getAll(self::MODULE)['updated'] ?? null];
+                    $outcome['after'] = [$store->get(self::$module, 'updated'), $store->getAll(self::$module)['updated'] ?? null];
                     $outcome['update'] = $orm->getQueryAdapter()->execute(
                         'SELECT value FROM `platform_settings` WHERE module_key = :m AND setting_key = :k',
-                        ['m' => self::MODULE, 'k' => 'updated'],
+                        ['m' => self::$module, 'k' => 'updated'],
                     )->rows[0]['value'] ?? null;
                 } catch (\Throwable $e) {
                     $failure = $e;
                 } finally {
                     try {
-                        $orm->getQueryAdapter()->execute('DELETE FROM `platform_settings` WHERE module_key = :m', ['m' => self::MODULE]);
+                        $orm->getQueryAdapter()->execute('DELETE FROM `platform_settings` WHERE module_key = :m', ['m' => self::$module]);
                     } catch (\Throwable $e) {
                         $failure ??= $e;
                     } finally {
@@ -128,15 +129,15 @@ final class SettingsWriteJoinsTransactionTest extends TestCase
             module_key TEXT NOT NULL, setting_key TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT, updated_at TEXT)');
         $store = (new \ReflectionClass(SettingsStore::class))->newInstanceWithoutConstructor();
         (new \ReflectionProperty(SettingsStore::class, 'orm'))->setValue($store, $orm);
-        $store->set(self::MODULE, 'k', 'before');
+        $store->set(self::$module, 'k', 'before');
         $probe = new \RuntimeException('deliberate rollback');
         $seen = [];
 
         $orm->getTransactionManager()->run(static function () use ($orm, $store, $probe, &$seen): void {
             try {
                 $orm->getTransactionManager()->run(static function () use ($store, $probe, &$seen): void {
-                    $store->set(self::MODULE, 'k', 'after');
-                    $seen['inside'] = [$store->get(self::MODULE, 'k'), $store->getAll(self::MODULE)['k'] ?? null];
+                    $store->set(self::$module, 'k', 'after');
+                    $seen['inside'] = [$store->get(self::$module, 'k'), $store->getAll(self::$module)['k'] ?? null];
                     throw $probe;
                 });
             } catch (\RuntimeException $e) {
@@ -144,9 +145,9 @@ final class SettingsWriteJoinsTransactionTest extends TestCase
                     throw $e;
                 }
             }
-            $seen['outer'] = [$store->get(self::MODULE, 'k'), $store->getAll(self::MODULE)['k'] ?? null];
+            $seen['outer'] = [$store->get(self::$module, 'k'), $store->getAll(self::$module)['k'] ?? null];
         });
-        $seen['committed'] = [$store->get(self::MODULE, 'k'), $store->getAll(self::MODULE)['k'] ?? null];
+        $seen['committed'] = [$store->get(self::$module, 'k'), $store->getAll(self::$module)['k'] ?? null];
 
         self::assertSame(['after', 'after'], $seen['inside']);
         self::assertSame(['before', 'before'], $seen['outer'], 'the savepoint rollback dropped both caches');
