@@ -385,7 +385,7 @@ final class SettingsStore implements SettingsStoreInterface
         return $resource;
     }
 
-    /** Drop one scope after a write; again on rollback (a read since cached the value) and, for the snapshot, on commit. */
+    /** Drop one scope after a write; again on rollback or a failed commit (a read since cached the value) and, for the snapshot, on commit. */
     private function forgetRead(string $moduleKey, string $key, ?string $userId, ?string $tenantId = null): void
     {
         $tenantId ??= $this->currentTenantId();
@@ -395,7 +395,7 @@ final class SettingsStore implements SettingsStoreInterface
             $this->snapshots?->forget($tenantId, $moduleKey);
             $this->orm()->getTransactionManager()->afterCommit(fn () => $this->snapshots?->forget($tenantId, $moduleKey));
         }
-        $this->orm()->getTransactionManager()->afterRollback(fn () => $this->forgetRead($moduleKey, $key, $userId, $tenantId));
+        $this->orm()->getTransactionManager()->afterRollback(fn () => $this->forgetRead($moduleKey, $key, $userId, $tenantId), evenIfCommitFailed: true);
     }
 
     /** @return list<Setting> every row of one module and scope, in one statement */
