@@ -159,6 +159,41 @@ final class SettingsWriteJoinsTransactionTest extends TestCase
         self::assertSame(['before', 'before'], $seen['committed']);
     }
 
+    /**
+     * A commit that threw may have gone through or not; a value read and cached
+     * during it must not outlive it (tk-failed-commit-keeps-cached-write). The
+     * cache drop ran on a rollback only, so a failed COMMIT left the uncommitted
+     * value cached. A deferred foreign key makes this COMMIT fail.
+     */
+    #[Test]
+    public function a_failed_commit_leaves_no_cached_value_behind(): void
+    {
+        $orm = new OrmManager(config: new ConnectionConfig(driver: 'sqlite', sqliteMemory: true));
+        $db = $orm->getAdapter();
+        $db->execute('CREATE TABLE platform_settings (id TEXT PRIMARY KEY, tenant_id TEXT, user_id TEXT,
+            module_key TEXT NOT NULL, setting_key TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT, updated_at TEXT)');
+        $db->execute('PRAGMA foreign_keys = ON');
+        $db->execute('CREATE TABLE fk_parent (id INTEGER PRIMARY KEY)');
+        $db->execute('CREATE TABLE fk_child (parent_id INTEGER REFERENCES fk_parent(id) DEFERRABLE INITIALLY DEFERRED)');
+        $store = (new \ReflectionClass(SettingsStore::class))->newInstanceWithoutConstructor();
+        (new \ReflectionProperty(SettingsStore::class, 'orm'))->setValue($store, $orm);
+        $store->set(self::$module, 'k', 'before');
+        $inside = null;
+
+        try {
+            $orm->getTransactionManager()->run(static function ($tx) use ($store, &$inside): void {
+                $store->set(self::$module, 'k', 'after');
+                $inside = [$store->get(self::$module, 'k'), $store->getAll(self::$module)['k'] ?? null];
+                $tx->execute('INSERT INTO fk_child (parent_id) VALUES (404)');
+            });
+            self::fail('the deferred foreign key must fail the COMMIT');
+        } catch (\PDOException) {
+        }
+
+        self::assertSame(['after', 'after'], $inside, 'cached during the transaction');
+        self::assertSame(['before', 'before'], [$store->get(self::$module, 'k'), $store->getAll(self::$module)['k'] ?? null], 'neither cache serves what did not commit');
+    }
+
     private function requireMysql(): void
     {
         $orm = new OrmManager();
