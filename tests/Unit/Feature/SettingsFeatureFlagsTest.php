@@ -31,7 +31,7 @@ final class SettingsFeatureFlagsTest extends TestCase
         $orm->getAdapter()->execute(
             'CREATE TABLE platform_settings (
                 id TEXT PRIMARY KEY, tenant_id TEXT, user_id TEXT, module_key TEXT NOT NULL,
-                setting_key TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT, updated_at TEXT
+                setting_key TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT, updated_at TEXT, updated_by TEXT
             )',
         );
         // The request is for another site than every write below: reads must pin their tenants.

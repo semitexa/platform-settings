@@ -131,7 +131,7 @@ final class SettingsWriteJoinsTransactionTest extends TestCase
     {
         $orm = new OrmManager(config: new ConnectionConfig(driver: 'sqlite', sqliteMemory: true));
         $orm->getAdapter()->execute('CREATE TABLE platform_settings (id TEXT PRIMARY KEY, tenant_id TEXT, user_id TEXT,
-            module_key TEXT NOT NULL, setting_key TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT, updated_at TEXT)');
+            module_key TEXT NOT NULL, setting_key TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT, updated_at TEXT, updated_by TEXT)');
         $store = (new \ReflectionClass(SettingsStore::class))->newInstanceWithoutConstructor();
         (new \ReflectionProperty(SettingsStore::class, 'orm'))->setValue($store, $orm);
         $store->set(self::$module, 'k', 'before');
@@ -171,7 +171,7 @@ final class SettingsWriteJoinsTransactionTest extends TestCase
         $orm = new OrmManager(config: new ConnectionConfig(driver: 'sqlite', sqliteMemory: true));
         $db = $orm->getAdapter();
         $db->execute('CREATE TABLE platform_settings (id TEXT PRIMARY KEY, tenant_id TEXT, user_id TEXT,
-            module_key TEXT NOT NULL, setting_key TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT, updated_at TEXT)');
+            module_key TEXT NOT NULL, setting_key TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT, updated_at TEXT, updated_by TEXT)');
         $db->execute('PRAGMA foreign_keys = ON');
         $db->execute('CREATE TABLE fk_parent (id INTEGER PRIMARY KEY)');
         $db->execute('CREATE TABLE fk_child (parent_id INTEGER REFERENCES fk_parent(id) DEFERRABLE INITIALLY DEFERRED)');

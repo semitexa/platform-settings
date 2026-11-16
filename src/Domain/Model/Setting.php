@@ -25,6 +25,8 @@ final readonly class Setting
         private string $value,
         private ?\DateTimeImmutable $createdAt = null,
         private ?\DateTimeImmutable $updatedAt = null,
+        /** Who made the last change; null when the write named nobody. */
+        private ?string $updatedBy = null,
     ) {}
 
     public function getId(): string
@@ -65,6 +67,11 @@ final readonly class Setting
     public function getUpdatedAt(): ?\DateTimeImmutable
     {
         return $this->updatedAt;
+    }
+
+    public function getUpdatedBy(): ?string
+    {
+        return $this->updatedBy;
     }
 
     /** True when nothing was stored — distinct from a stored empty value. */

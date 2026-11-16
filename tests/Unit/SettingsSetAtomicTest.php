@@ -39,7 +39,7 @@ final class SettingsSetAtomicTest extends TestCase
                 setting_key TEXT NOT NULL,
                 value TEXT NOT NULL,
                 created_at TEXT,
-                updated_at TEXT
+                updated_at TEXT, updated_by TEXT
             )',
         );
 
@@ -86,7 +86,7 @@ final class SettingsSetAtomicTest extends TestCase
         $otherDb->execute(
             'CREATE TABLE platform_settings (id TEXT PRIMARY KEY, tenant_id TEXT, user_id TEXT,
                 module_key TEXT NOT NULL, setting_key TEXT NOT NULL, value TEXT NOT NULL,
-                created_at TEXT, updated_at TEXT)',
+                created_at TEXT, updated_at TEXT, updated_by TEXT)',
         );
         $otherStore = new SettingsStore();
         (new \ReflectionProperty(SettingsStore::class, 'orm'))->setValue($otherStore, $otherOrm);

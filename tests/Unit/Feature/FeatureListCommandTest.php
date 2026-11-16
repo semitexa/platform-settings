@@ -26,7 +26,7 @@ final class FeatureListCommandTest extends TestCase
     public function a_user_is_listed_only_within_a_site(): void
     {
         $orm = new OrmManager(config: new ConnectionConfig(driver: 'sqlite', sqliteMemory: true));
-        $orm->getAdapter()->execute('CREATE TABLE platform_settings (id TEXT PRIMARY KEY, tenant_id TEXT, user_id TEXT, module_key TEXT NOT NULL, setting_key TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT, updated_at TEXT)');
+        $orm->getAdapter()->execute('CREATE TABLE platform_settings (id TEXT PRIMARY KEY, tenant_id TEXT, user_id TEXT, module_key TEXT NOT NULL, setting_key TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT, updated_at TEXT, updated_by TEXT)');
         $store = new SettingsStore();
         (new \ReflectionProperty(SettingsStore::class, 'orm'))->setValue($store, $orm);
         FeatureFlagWriter::of($store)->enable('checkout.new-flow', 'acme', 'u1');

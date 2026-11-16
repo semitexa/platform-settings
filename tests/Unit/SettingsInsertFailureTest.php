@@ -37,7 +37,7 @@ final class SettingsInsertFailureTest extends TestCase
         // No `id` column: the UPDATE runs (and matches nothing), the INSERT fails, not on a key.
         $orm->getAdapter()->execute(
             'CREATE TABLE platform_settings (tenant_id TEXT, user_id TEXT, module_key TEXT NOT NULL,
-                setting_key TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT, updated_at TEXT)',
+                setting_key TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT, updated_at TEXT, updated_by TEXT)',
         );
         $store = (new \ReflectionClass(SettingsStore::class))->newInstanceWithoutConstructor();
         (new \ReflectionProperty(SettingsStore::class, 'orm'))->setValue($store, $orm);

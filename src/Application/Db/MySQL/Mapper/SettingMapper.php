@@ -26,6 +26,7 @@ final class SettingMapper implements ResourceModelMapperInterface
             value: $resourceModel->value,
             createdAt: $resourceModel->created_at,
             updatedAt: $resourceModel->updated_at,
+            updatedBy: $resourceModel->updated_by,
         );
     }
 
@@ -44,6 +45,7 @@ final class SettingMapper implements ResourceModelMapperInterface
             value: $domainModel->getValue(),
             created_at: $domainModel->getCreatedAt() ?? $now,
             updated_at: $domainModel->getUpdatedAt() ?? $now,
+            updated_by: $domainModel->getUpdatedBy(),
         );
     }
 }
