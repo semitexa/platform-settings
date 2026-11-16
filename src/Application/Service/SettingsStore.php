@@ -124,7 +124,7 @@ final class SettingsStore implements SettingsStoreInterface
         $encodedExpected = json_encode($expected, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_UNICODE | \JSON_UNESCAPED_SLASHES);
         $result = $this->orm()->getQueryAdapter()->execute(
             'UPDATE `platform_settings`
-                SET value = :next_value, updated_at = :updated_at
+                SET value = :next_value, updated_at = :updated_at, updated_by = NULL
               WHERE tenant_id = :tenant_id
                 AND module_key = :module_key
                 AND setting_key = :setting_key
@@ -263,7 +263,7 @@ final class SettingsStore implements SettingsStoreInterface
         $userClause = $userId === null ? 'user_id IS NULL' : 'user_id = :user_id';
         $result = $this->orm()->getQueryAdapter()->execute(
             "UPDATE `platform_settings`
-                SET value = :value, updated_at = :updated_at
+                SET value = :value, updated_at = :updated_at, updated_by = NULL
               WHERE tenant_id = :tenant_id AND module_key = :module_key AND setting_key = :setting_key AND {$userClause}",
             array_merge(
                 [

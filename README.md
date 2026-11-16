@@ -17,6 +17,7 @@ Depends on Core, ORM and Update (a data patch backfills `tenant_id`). Used by pl
 ## Key Features
 
 - `SettingsStoreInterface` contract: `get`, `set`, `getAll`, `remove`, `has`, `claim` per module key, plus `*ForUser` variants for personal settings
+- `AuditedSettingsStoreInterface`: `setBy` records who made a change, `setManyBy` writes several keys of a module all or none, and `describe` returns a key's value with `updatedAt` and `updatedBy` (what an admin page shows as "changed at X by Y"). A plain `set` names nobody, so it clears the author
 - Automatic tenant isolation via `tenant_id` scoping
 - JSON-serializable values (scalar, array, object)
 - ORM-backed persistence (`platform_settings` table, auto-synced via `orm:sync`)

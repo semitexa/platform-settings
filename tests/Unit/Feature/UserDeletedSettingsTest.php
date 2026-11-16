@@ -19,8 +19,8 @@ final class UserDeletedSettingsTest extends TestCase
     public function a_deleted_users_settings_go_on_every_site_and_nobody_elses_do(): void
     {
         $orm = new OrmManager(config: new ConnectionConfig(driver: 'sqlite', sqliteMemory: true));
-        $orm->getAdapter()->execute('CREATE TABLE platform_settings (id TEXT PRIMARY KEY, tenant_id TEXT, user_id TEXT, module_key TEXT NOT NULL, setting_key TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT, updated_at TEXT)');
-        $orm->getAdapter()->execute("INSERT INTO platform_settings VALUES ('1', 'acme', 'u1', 'feature_flags', 'x', 'true', NULL, NULL), ('2', 'globex', 'u1', 'ui', 'theme', '\"dark\"', NULL, NULL), ('3', 'acme', 'u2', 'feature_flags', 'x', 'true', NULL, NULL), ('4', 'acme', NULL, 'feature_flags', 'x', 'false', NULL, NULL)");
+        $orm->getAdapter()->execute('CREATE TABLE platform_settings (id TEXT PRIMARY KEY, tenant_id TEXT, user_id TEXT, module_key TEXT NOT NULL, setting_key TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT, updated_at TEXT, updated_by TEXT)');
+        $orm->getAdapter()->execute("INSERT INTO platform_settings VALUES ('1', 'acme', 'u1', 'feature_flags', 'x', 'true', NULL, NULL, NULL), ('2', 'globex', 'u1', 'ui', 'theme', '\"dark\"', NULL, NULL, NULL), ('3', 'acme', 'u2', 'feature_flags', 'x', 'true', NULL, NULL, NULL), ('4', 'acme', NULL, 'feature_flags', 'x', 'false', NULL, NULL, NULL)");
         $store = new SettingsStore();
         (new \ReflectionProperty(SettingsStore::class, 'orm'))->setValue($store, $orm);
         $listener = new UserDeletedSettingsListener();

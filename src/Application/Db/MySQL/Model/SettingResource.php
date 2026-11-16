@@ -64,5 +64,9 @@ final readonly class SettingResource
 
         #[Column(type: MySqlType::Datetime)]
         public \DateTimeImmutable $updated_at,
+
+        /** Who made the last change, when the writer said; null for a write that named nobody. */
+        #[Column(type: MySqlType::Varchar, length: 64, nullable: true)]
+        public ?string $updated_by = null,
     ) {}
 }

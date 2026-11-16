@@ -47,7 +47,7 @@ final class SettingsQueryBudgetTest extends TestCase
                 setting_key TEXT NOT NULL,
                 value TEXT NOT NULL,
                 created_at TEXT,
-                updated_at TEXT
+                updated_at TEXT, updated_by TEXT
             )',
         );
 

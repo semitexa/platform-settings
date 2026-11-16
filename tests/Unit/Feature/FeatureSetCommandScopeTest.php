@@ -80,7 +80,7 @@ final class FeatureSetCommandScopeTest extends TestCase
     private function command(array $sites, ?OrmManager &$orm = null): FeatureSetCommand
     {
         $orm = new OrmManager(config: new ConnectionConfig(driver: 'sqlite', sqliteMemory: true));
-        $orm->getAdapter()->execute('CREATE TABLE platform_settings (id TEXT PRIMARY KEY, tenant_id TEXT, user_id TEXT, module_key TEXT NOT NULL, setting_key TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT, updated_at TEXT)');
+        $orm->getAdapter()->execute('CREATE TABLE platform_settings (id TEXT PRIMARY KEY, tenant_id TEXT, user_id TEXT, module_key TEXT NOT NULL, setting_key TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT, updated_at TEXT, updated_by TEXT)');
         $store = new SettingsStore();
         (new \ReflectionProperty(SettingsStore::class, 'orm'))->setValue($store, $orm);
         $fanout = new class ($sites) implements TenantFanoutInterface {
