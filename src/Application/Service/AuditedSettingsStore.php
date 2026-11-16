@@ -28,7 +28,7 @@ final class AuditedSettingsStore implements AuditedSettingsStoreInterface
 {
     use OrmBackedStore;
 
-    /** The `updated_by` column's length. */
+    /** The `updated_by` column's length, in characters as MySQL counts a varchar. */
     private const AUTHOR_MAX = 64;
 
     #[InjectAsReadonly]
@@ -47,7 +47,7 @@ final class AuditedSettingsStore implements AuditedSettingsStoreInterface
 
     public function setManyBy(string $moduleKey, array $values, ?string $byUserId): void
     {
-        if ($byUserId !== null && ($byUserId === '' || strlen($byUserId) > self::AUTHOR_MAX)) {
+        if ($byUserId !== null && ($byUserId === '' || mb_strlen($byUserId, 'UTF-8') > self::AUTHOR_MAX)) {
             throw new \InvalidArgumentException('byUserId must be null or 1-' . self::AUTHOR_MAX . ' characters');
         }
         $this->orm()->getTransactionManager()->run(function () use ($moduleKey, $values, $byUserId): void {

@@ -122,6 +122,16 @@ final class AuditedSettingsStoreTest extends TestCase
     }
 
     #[Test]
+    public function an_author_is_measured_in_characters_not_bytes(): void
+    {
+        $author = str_repeat('é', 64); // 64 characters, 128 bytes
+
+        $this->audited->setBy('payments', 'liqpay_public', 'pk_1', $author);
+
+        self::assertSame($author, $this->audited->describe('payments', 'liqpay_public')?->updatedBy);
+    }
+
+    #[Test]
     public function an_author_longer_than_its_column_is_refused_and_nothing_is_written(): void
     {
         try {
