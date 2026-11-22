@@ -45,6 +45,9 @@ final class SettingsStoreBuiltBareSeesTheTenantTest extends TestCase
     #[Test]
     public function outside_a_coroutine_two_tenants_keep_their_own_value_under_one_key(): void
     {
+        // The slot is process-wide out here: whatever another fixture left in
+        // it is put back, not wiped.
+        $previous = CoroutineLocal::get(DefaultTenantContextStore::CONTEXT_KEY);
         try {
             self::activate('tenant-acme');
             $this->bareStore()->set('os', 'assistant_name', 'Ada');
@@ -56,8 +59,11 @@ final class SettingsStoreBuiltBareSeesTheTenantTest extends TestCase
             self::activate('tenant-acme');
             self::assertSame('Ada', $this->bareStore()->get('os', 'assistant_name'));
         } finally {
-            // This test filled the process-wide half of the slot; it empties it.
-            CoroutineLocal::remove(DefaultTenantContextStore::CONTEXT_KEY);
+            if ($previous === null) {
+                CoroutineLocal::remove(DefaultTenantContextStore::CONTEXT_KEY);
+            } else {
+                CoroutineLocal::set(DefaultTenantContextStore::CONTEXT_KEY, $previous);
+            }
         }
 
         self::assertSame(
