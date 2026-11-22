@@ -32,7 +32,7 @@
         },
         "semitexa": {
             "floors": {
-                "semitexa/core": "2026.10.29.1052",
+                "semitexa/core": "next",
                 "semitexa/orm": "2026.11.12.0720"
             }
         }

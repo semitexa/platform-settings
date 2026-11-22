@@ -429,14 +429,14 @@ final class SettingsStore implements SettingsStoreInterface
     }
 
     /**
-     * Current tenant id, or the 'default' sentinel — never null, so the
-     * fail-closed tenant filter and every raw-SQL WHERE bind a concrete value.
+     * Current tenant id, or 'default' when no tenant is active: never null. A
+     * store built bare asks core's store, which reads the slot the active one
+     * wrote; answering 'default' there filed every tenant's rows under one id.
      */
     private function currentTenantId(): string
     {
-        $context = isset($this->tenantContextStore) ? $this->tenantContextStore->tryGet() : null;
-
-        return TenantContextAccess::tenantIdOrDefault($context);
+        $store = $this->tenantContextStore ??= new \Semitexa\Core\Tenant\DefaultTenantContextStore();
+        return TenantContextAccess::tenantIdOrDefault($store->tryGet());
     }
 
     private function repository(): DomainRepository
